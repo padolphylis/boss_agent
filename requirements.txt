@@ -1,0 +1,13 @@
+langgraph
+langchain-openai
+playwright
+paddleocr
+paddlepaddle
+pydantic
+fastapi
+uvicorn[standard]
+sqlalchemy
+apscheduler
+structlog
+python-dotenv
+pytest
