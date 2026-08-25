@@ -1,7 +1,7 @@
 from DrissionPage import ChromiumPage
-from langchain.tools import tool
+from langchain_core.tools import tool
 
-# @tool(name="open_browser")
+# @tool("open_browser")
 def open_browser(page: ChromiumPage, query: str) -> str:
     """打开指定网页，并返回网页标题。
 
