@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>职位助手</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; }
+    body { margin: 0; background: #f4f6f8; color: #1f2937; }
+    main { max-width: 1100px; margin: 40px auto; padding: 0 20px; }
+    h1 { margin-bottom: 8px; }
+    .subtle { color: #6b7280; }
+    form, .panel { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-top: 20px; }
+    label { display: block; font-weight: 600; margin: 14px 0 8px; }
+    textarea { width: 100%; min-height: 90px; box-sizing: border-box; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; resize: vertical; font: inherit; }
+    button { margin-top: 16px; padding: 10px 18px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+    button:disabled { background: #9ca3af; cursor: wait; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    .job { border-top: 1px solid #e5e7eb; padding: 14px 0; }
+    .job:first-child { border-top: 0; }
+    .job-title { font-weight: 700; }
+    .meta { color: #6b7280; font-size: 14px; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>职位助手</h1>
+    <div class="subtle">输入自然语言需求，系统会分析意图并搜索职位。</div>
+    <form id="search-form">
+      <label for="message">搜索需求</label>
+      <textarea id="message" required placeholder="例如：杭州 5-10K 本科 1-3年 AI应用工程师"></textarea>
+      <label for="resume">简历内容（可选）</label>
+      <textarea id="resume" placeholder="简历分析模块预留，当前会保存但不执行分析"></textarea>
+      <button id="submit" type="submit">开始搜索</button>
+    </form>
+    <section class="panel">
+      <h2>任务状态</h2>
+      <pre id="status">等待提交</pre>
+    </section>
+    <section class="panel">
+      <h2>职位结果</h2>
+      <div id="jobs" class="subtle">暂无结果</div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector('#search-form');
+    const button = document.querySelector('#submit');
+    const status = document.querySelector('#status');
+    const jobs = document.querySelector('#jobs');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      status.textContent = '正在分析意图并搜索，请稍候...';
+      jobs.textContent = '';
+      try {
+        const response = await fetch('/api/search', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            message: document.querySelector('#message').value,
+            resume: document.querySelector('#resume').value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '请求失败');
+        status.textContent = JSON.stringify({
+          status: data.status,
+          intent: data.intent,
+          search_params: data.search_params,
+          result: data.result,
+          error: data.error
+        }, null, 2);
+        if (!data.jobs || data.jobs.length === 0) {
+          jobs.textContent = '没有找到职位。';
+        } else {
+          data.jobs.forEach((job) => {
+            const item = document.createElement('article');
+            item.className = 'job';
+            item.innerHTML = `
+              <div class="job-title">${escapeHtml(job.jobName || '未命名职位')}</div>
+              <div class="meta">${escapeHtml(job.brandName || '')} · ${escapeHtml(job.salaryDesc || '')} · ${escapeHtml(job.cityName || '')}</div>
+            `;
+            jobs.appendChild(item);
+          });
+        }
+      } catch (error) {
+        status.textContent = `失败：${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[char]));
+    }
+  </script>
+</body>
+</html>
