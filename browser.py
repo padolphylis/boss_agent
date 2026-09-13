@@ -1,84 +1,32 @@
 import json
 import pathlib
 from dataclasses import dataclass
+from random import uniform
 from time import sleep
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-BASE_DIR = pathlib.Path(__file__).resolve().parent
-user_data_dir = BASE_DIR.parent / 'user_data' / 'user_data'
-SAVE_DIR = BASE_DIR / 'jobs_data'
+from get_value import code_book
+
+base_dir = pathlib.Path(__file__).resolve().parent
+user_data_dir = base_dir.parent / 'user_data' / 'user_data'
+save_dir = base_dir / 'jobs_data'
 user_data_dir.mkdir(parents=True, exist_ok=True)
-SAVE_DIR.mkdir(parents=True, exist_ok=True)
+save_dir.mkdir(parents=True, exist_ok=True)
 
-JOB_LIST_TARGET = '/wapi/zpgeek/search/joblist.json'
-MAX_JOBLIST_PAGES = 8
-MAX_EMPTY_SCROLLS = 3
+job_list_target = '/wapi/zpgeek/search/joblist.json'
+job_card_target = '/wapi/zpgeek/job/card.json'
+push_api = 'https://www.zhipin.com/wapi/zpgeek/friend/add.json'
+daily_limit_hint = '您今天已与120位BOSS沟通'
+max_joblist_pages = 8
+max_empty_scrolls = 3
 
-# Boss 城市编码。城市名称由驱动层转换，编码来源于 Boss 的城市筛选参数。
-CITY_CODES = {
-    '北京': '101010100',
-    '上海': '101020100',
-    '杭州': '101210100',
-    '濮阳': '101181300',
-}
-
-# 薪资
-salary = {
-    "不限": "",
-    "3K以下": 402,
-    "3-5K": 403,
-    "5-10K": 404,
-    "10-20K": 405,
-    "20-50K": 406,
-    "50K以上": 407,
-}
-# 工作经验
-experience = {
-    "不限": "",
-    "在校生": 101,
-    "应届生": 102,
-    "经验不限": 103,
-    "1年以内": 104,
-    "1-3年": 105,
-    "3-5年": 106,
-    "5-10年": 107,
-    "10年以上": 108,
-}
-# 公司规模
-scale = {
-    "不限": "",
-    "0-20人": 301,
-    "20-99人": 302,
-    "100-499人": 303,
-    "500-999人": 304,
-    "1000-9999人": 305,
-    "10000人以上": 306,
-}
-# 学历
-stage = { 
-    "不限": "",
-    "初中及以下": 201,
-    "中专/中技": 202,
-    "高中": 203,
-    "大专": 204,
-    "本科": 205,
-    "硕士": 206,
-    "博士": 207,
-}
-# 求职类型
-job_type = {
-    "不限": "",
-    "全职": 1901,
-    "兼职": 1902,
-    "实习": 1903,
-}
 @dataclass
 class JobConfig:
-    JOB_LIST_TARGET = '/wapi/zpgeek/search/joblist.json'
-    MAX_JOBLIST_PAGES = 8
-    MAX_EMPTY_SCROLLS = 3
+    job_list_target = '/wapi/zpgeek/search/joblist.json'
+    max_joblist_pages = 8
+    max_empty_scrolls = 3
 
 
 
@@ -96,9 +44,11 @@ class BrowserManager:
 
 
     def start(self):
-        options = ChromiumOptions()
-        options.set_user_data_path(str(self.user_data_dir))
-        self._page = ChromiumPage(addr_or_opts=options)
+        """启动浏览器；已启动则直接复用，避免重复占用同一 user_data_dir。"""
+        if self._page is None:
+            options = ChromiumOptions()
+            options.set_user_data_path(str(self.user_data_dir))
+            self._page = ChromiumPage(addr_or_opts=options)
         return self
     
 
@@ -186,7 +136,7 @@ class BrowserManager:
     
 
 
-    def _job_key(self, job):
+    def job_key(self, job):
         """优先使用职位加密 ID,避免同一职位重复保存。"""
         return job.get('encryptJobId') or f"{job.get('jobName', '')}:{job.get('brandName', '')}:{job.get('lid', '')}"
 
@@ -208,15 +158,15 @@ class BrowserManager:
             return str(city)
 
         city_name = str(city).strip()
-        try:
-            return CITY_CODES[city_name]
-        except KeyError:
-            raise ValueError(f'暂不支持城市“{city_name}”，请补充 CITY_CODES 配置。')
+        code = code_book.city_code(city_name)
+        if not code:
+            raise ValueError(f'暂不支持城市“{city_name}”，请补充 data/city_codes.json。')
+        return code
 
     def get_job_list(
         self,
         query: str,
-        max_pages: int = MAX_JOBLIST_PAGES,
+        max_pages: int = max_joblist_pages,
         *,
         salary_code: str | int = '',
         experience_code: str | int = '',
@@ -247,8 +197,8 @@ class BrowserManager:
         search_url = 'https://www.zhipin.com/web/geek/jobs?' + urlencode(filters)
 
         try:
-            # 通过 URL 参数加载筛选条件，与 test.py 的测试方式一致。
-            page.listen.start(targets=[JOB_LIST_TARGET], is_regex=False)
+            # 通过 URL 参数加载筛选条件。
+            page.listen.start(targets=[job_list_target], is_regex=False)
             page.get(search_url)
             page.wait.load_start()
             has_more = True
@@ -265,7 +215,7 @@ class BrowserManager:
                 has_more = bool(zp_data.get('hasMore'))
 
                 for job in page_jobs:
-                    jobs_by_key.setdefault(self._job_key(job), job)
+                    jobs_by_key.setdefault(self.job_key(job), job)
 
                 page_no = len(pages) + 1
                 pages.append({
@@ -285,20 +235,20 @@ class BrowserManager:
                 after = self._scroll_state(page)
                 if before == after:
                     empty_scrolls += 1
-                    if empty_scrolls >= MAX_EMPTY_SCROLLS:
+                    if empty_scrolls >= max_empty_scrolls:
                         print('连续滚动未发生变化，停止采集。')
                         break
                 else:
                     empty_scrolls = 0
 
             jobs = list(jobs_by_key.values())
-            (SAVE_DIR / 'jobs.json').write_text(
+            (save_dir / 'jobs.json').write_text(
                 json.dumps(jobs, ensure_ascii=False, indent=2), encoding='utf-8'
             )
-            (SAVE_DIR / 'joblist_pages.json').write_text(
+            (save_dir / 'joblist_pages.json').write_text(
                 json.dumps(pages, ensure_ascii=False, indent=2), encoding='utf-8'
             )
-            (SAVE_DIR / 'joblist_summary.json').write_text(
+            (save_dir / 'joblist_summary.json').write_text(
                 json.dumps({
                     **filters,
                     'pages': len(pages),
@@ -306,7 +256,7 @@ class BrowserManager:
                     'has_more': has_more,
                 }, ensure_ascii=False, indent=2), encoding='utf-8'
             )
-            print(f'采集完成：{len(jobs)} 条职位，已保存到 {SAVE_DIR}')
+            print(f'采集完成：{len(jobs)} 条职位，已保存到 {save_dir}')
             return jobs
         except Exception as e:
             print(f'采集职位列表失败：{e}')
@@ -314,6 +264,170 @@ class BrowserManager:
 
             
 
+
+    def get_job_card(self, job: dict, timeout: float = 10) -> dict | None:
+        """获取单个职位的详情卡片。
+
+        参数:
+            job: 职位摘要字典，至少包含 securityId 和 lid。
+            timeout: 监听响应超时秒数。
+
+        返回:
+            jobCard 字典（含 postDescription、friendStatus 等），失败返回 None。
+        """
+        security_id = job.get('securityId', '')
+        lid = job.get('lid', '')
+        if not security_id or not lid:
+            return None
+
+        page = self.get_page()
+        params = {
+            'securityId': security_id,
+            'lid': lid,
+            '_': str(int(__import__('time').time() * 1000)),
+        }
+        card_url = 'https://www.zhipin.com' + job_card_target + '?' + urlencode(params)
+
+        page.listen.start(targets=[job_card_target], is_regex=False)
+        page.get(card_url)
+        packet = page.listen.wait(timeout=timeout)
+        page.listen.stop()
+
+        if not packet:
+            return None
+
+        body = packet.response.body
+        if isinstance(body, bytes):
+            body = body.decode('utf-8', errors='replace')
+        if isinstance(body, str):
+            body = json.loads(body)
+
+        if body.get('code') != 0:
+            return None
+
+        return (body.get('zpData') or {}).get('jobCard') or {}
+
+    def get_job_cards(self, jobs: list[dict], interval: tuple[float, float] = (1, 2)) -> list[dict]:
+        """批量获取职位详情卡片，自动控制请求间隔。
+
+        返回:
+            与 jobs 等长的列表，每项是 jobCard 字典或 None（失败的职位）。
+        """
+        cards = []
+        for index, job in enumerate(jobs, 1):
+            if index > 1:
+                sleep(uniform(*interval))
+
+            if self.check_yan_cheng_ma():
+                print(f'[{index}/{len(jobs)}] 检测到验证码，停止获取。')
+                cards.append(None)
+                continue
+
+            card = self.get_job_card(job)
+            title = job.get('jobName', '')
+            if card:
+                desc = card.get('postDescription', '')
+                print(f'[{index}/{len(jobs)}] {title}：正文 {len(desc)} 字。')
+            else:
+                print(f'[{index}/{len(jobs)}] {title}：获取失败。')
+            cards.append(card)
+        return cards
+
+    def _read_bst(self) -> str:
+        """取 bst cookie，投递接口要求放进 Zp_token 头。"""
+        for cookie in self.get_page().cookies():
+            if cookie.get('name') == 'bst':
+                return cookie.get('value', '')
+        return ''
+
+    _push_js = """
+    async (url, token) => {
+        const resp = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {'Zp_token': token},
+        });
+        return await resp.text();
+    }
+    """
+
+    def push_job(self, job: dict, retries: int = 3) -> tuple[bool, str]:
+        """向单个职位发起投递（打招呼）。
+
+        返回:
+            (是否成功, 消息)
+        """
+        security_id = job.get('securityId', '')
+        job_id = job.get('encryptJobId', '')
+        lid = job.get('lid', '')
+        if not all([security_id, job_id, lid]):
+            return False, '缺少 securityId / encryptJobId / lid'
+
+        token = self._read_bst()
+        if not token:
+            return False, '未登录（bst cookie 为空）'
+
+        url = f'{push_api}?securityId={security_id}&jobId={job_id}&lid={lid}'
+        page = self.get_page()
+        last_error = ''
+
+        for _ in range(retries):
+            try:
+                raw = page.run_async_js(self._push_js, url, token)
+                payload = json.loads(raw)
+            except Exception as exc:
+                last_error = f'{type(exc).__name__}: {exc}'
+                sleep(0.8)
+                continue
+
+            code = payload.get('code')
+            message = payload.get('message') or ''
+            remind = (
+                ((payload.get('zpData') or {}).get('bizData') or {})
+                .get('chatRemindDialog') or {}
+            ).get('content') or ''
+
+            if code == 0 and message == 'Success':
+                return True, 'Success'
+            if daily_limit_hint in remind:
+                return True, remind
+            return False, remind or message or f'code={code}'
+
+        return False, f'重试 {retries} 次仍失败：{last_error}'
+
+    def push_jobs(
+        self,
+        matched: list[dict],
+        interval: tuple[float, float] = (3, 5),
+    ) -> list[dict]:
+        """批量投递。
+
+        参数:
+            matched: match_job_content 输出的列表，每项含 job_card。
+            interval: 每次投递间隔秒数范围。
+
+        返回:
+            [{"job_card": ..., "success": bool, "message": str}, ...]
+        """
+        results = []
+        for index, item in enumerate(matched, 1):
+            card = item.get('job_card') or item
+            title = card.get('jobName', '') or card.get('postDescription', '')[:20]
+
+            if index > 1:
+                sleep(uniform(*interval))
+
+            if self.check_yan_cheng_ma():
+                print(f'[{index}/{len(matched)}] 检测到验证码，停止投递。')
+                results.append({"job_card": card, "success": False, "message": "验证码阻断"})
+                break
+
+            ok, msg = self.push_job(card)
+            tag = "成功" if ok else "失败"
+            print(f'[{index}/{len(matched)}] {tag}：{title} -> {msg}')
+            results.append({"job_card": card, "success": ok, "message": msg})
+
+        return results
 
     def close(self):
         if self._page is not None:

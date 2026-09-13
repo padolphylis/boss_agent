@@ -1,1 +1,8 @@
 .env
+
+# Local browser profile and runtime data
+user_data/
+data/*.db
+jobs_data/
+__pycache__/
+*.py[cod]
