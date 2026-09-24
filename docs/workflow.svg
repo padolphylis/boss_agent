@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+  <title id="title">Boss Agent workflow</title>
+  <desc id="desc">Seven sequential stages from user input to tracked delivery.</desc>
+  <rect width="1280" height="360" fill="#f7f4ee"/>
+  <text x="48" y="58" font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="30" font-weight="700" fill="#1f2933">一次求职任务</text>
+  <g font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="16" text-anchor="middle">
+    <g fill="#102a43">
+      <rect x="36" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="111" y="175">输入需求</text>
+      <rect x="214" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="289" y="175">解析条件</text>
+      <rect x="392" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="467" y="175">登录检查</text>
+      <rect x="570" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="645" y="175">采集详情</text>
+      <rect x="748" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="823" y="175">向量匹配</text>
+      <rect x="926" y="130" width="150" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="1001" y="175">投递职位</text>
+      <rect x="1104" y="130" width="140" height="78" rx="8" fill="#fff" stroke="#d9e2ec"/><text x="1174" y="175">记录状态</text>
+    </g>
+    <g stroke="#334e68" stroke-width="2" fill="none">
+      <path d="M186 169 H214" marker-end="url(#a)"/><path d="M364 169 H392" marker-end="url(#a)"/><path d="M542 169 H570" marker-end="url(#a)"/><path d="M720 169 H748" marker-end="url(#a)"/><path d="M898 169 H926" marker-end="url(#a)"/><path d="M1076 169 H1104" marker-end="url(#a)"/>
+    </g>
+  </g>
+  <text x="48" y="270" font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="16" fill="#52606d">条件不足会返回补充问题；向量服务异常时使用本地余弦匹配；中断后可从最近完成的节点继续。</text>
+  <defs><marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0 L10 4 L0 8 Z" fill="#334e68"/></marker></defs>
+</svg>
