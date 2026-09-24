@@ -59,14 +59,6 @@ Qdrant 默认启用，数据保存在 `data/qdrant/`。填写 `qdrant_url` 后�
 - `vector_store.py`：Qdrant 索引与召回。
 - `conversation_store.py`、`delivery_store.py`：SQLite 状态存储。
 
-## 测试
-
-```bash
-python3 -m unittest discover -s test -p 'test_*.py' -q
-```
-
-`test/test_job_detail_click.py` 和 `test/smoke_browser_job_details.py` 会打开真实浏览器，只在需要验证 Boss 页面结构时手动运行。
-
 ## 数据与限制
 
 `.env`、SQLite 数据库、简历、浏览器用户目录、Qdrant 数据和运行日志都保留在本机，不应提交到 Git。
