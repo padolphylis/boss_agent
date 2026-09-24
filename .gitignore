@@ -1,0 +1,21 @@
+.env
+
+# OS and local debugging artifacts
+.DS_Store
+.dbg/
+
+# Local browser profile and runtime data
+user_data/
+data/*.db
+data/qdrant/
+jobs_data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.playwright-cli/
+
+# Application logs
+logs/
+data/resumes/

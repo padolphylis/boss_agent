@@ -1,0 +1,8 @@
+Flask
+uvicorn
+pydantic
+DrissionPage
+langgraph
+langchain-openai
+openai
+qdrant-client>=1.14,<2
