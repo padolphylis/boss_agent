@@ -7,7 +7,7 @@ from random import uniform
 from typing import Callable
 from time import monotonic, sleep
 from urllib.request import urlopen
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from DrissionPage import ChromiumPage, ChromiumOptions
 
@@ -47,11 +47,10 @@ job_list_target = '/wapi/zpgeek/search/joblist.json'
 push_api = 'https://www.zhipin.com/wapi/zpgeek/friend/add.json'
 daily_limit_hint = '您今天已与120位BOSS沟通'
 max_joblist_pages = 8
-max_empty_scrolls = 3
 chat_url = 'https://www.zhipin.com/web/geek/chat'
 
-# 职位详情改为通过列表中的正常点击读取 DOM。这里保留多个选择器，
-# 以兼容 BOSS 页面不同版本的详情容器；不会直接请求 job/card.json。
+# 职位详情在后台标签页打开网页后读取 DOM，不触碰搜索列表页；
+# 这里保留多个选择器以兼容 BOSS 页面不同版本的详情容器。
 job_card_selector = '.job-card-wrapper, .job-card-wrap'
 job_detail_body_selectors = (
     '.job-detail-body .desc',
@@ -120,7 +119,6 @@ def _stop_stale_browser(port: int, data_dir: pathlib.Path) -> bool:
 class JobConfig:
     job_list_target = '/wapi/zpgeek/search/joblist.json'
     max_joblist_pages = 8
-    max_empty_scrolls = 3
 
 
 
@@ -129,8 +127,9 @@ class BrowserManager:
     def __init__(self):
         self.user_data_dir = user_data_dir
         self._page:ChromiumPage|None = None
+        # 投递请求使用独立的后台标签页，避免影响用户正在查看的搜索页面。
+        self._push_page = None
         self._last_search_url = ''
-        self._detail_list_exhausted = False
         # 浏览器就绪信号：_page 首次可用时置位，供聊天监听等后台线程等待。
         self._ready = Event()
 
@@ -528,10 +527,10 @@ class BrowserManager:
         return self.check_login()
 
 
-
     def job_key(self, job):
         """优先使用职位加密 ID,避免同一职位重复保存。"""
         return job.get('encryptJobId') or f"{job.get('jobName', '')}:{job.get('brandName', '')}:{job.get('lid', '')}"
+
 
     def _scroll_state(self, page):
         """获取页面滚动状态，用于判断滚动是否触发了新数据加载。"""
@@ -542,6 +541,7 @@ class BrowserManager:
                 viewport: window.innerHeight
             };
         ''')
+
 
     def _resolve_city_code(self, city: str) -> str:
         """把城市名称转换为 Boss 城市编码。"""
@@ -555,6 +555,7 @@ class BrowserManager:
         if not code:
             raise ValueError(f'暂不支持城市“{city_name}”，请补充 data/city_codes.json。')
         return code
+
 
     def get_job_list(
         self,
@@ -579,7 +580,7 @@ class BrowserManager:
         jobs_by_key = {}
         city_code = self._resolve_city_code(city)
         # URL 参数只保留有值的筛选项；筛选名称到编码的转换由调用方
-        # 依据 data/filter_options.json 完成，这里只负责拼接 URL。
+        # 依据 data/*_codes.json 完成，这里只负责拼接 URL。
         filters = {
             'city': city_code,
             'jobType': job_type_code,
@@ -610,7 +611,6 @@ class BrowserManager:
             page.listen.start(targets=[job_list_target], is_regex=False)
             listener_started = True
             page.get(search_url)
-            self._detail_list_exhausted = False
             page.wait.load_start()
             has_more = True
             while has_more and len(pages) < max_pages:
@@ -712,70 +712,6 @@ class BrowserManager:
                 except Exception:
                     logger.debug("停止职位列表监听失败", exc_info=True)
 
-    def _job_list_snapshot(self) -> list[dict]:
-        """只读取卡片链接中的职位 ID；不按列表下标或模糊标题匹配。"""
-        return self.get_page().run_js(r"""
-            return [...document.querySelectorAll(arguments[0])].map(card => {
-                const link = card.querySelector('a[href*="/job_detail/"]');
-                const path = link ? new URL(link.href, location.href).pathname : '';
-                const match = path.match(/^\/job_detail\/([^/]+)\.html$/);
-                return {id: match ? match[1] : ''};
-            }).filter(card => card.id);
-        """, job_card_selector) or []
-
-    def _find_job_card_element(self, job_id: str):
-        """重新定位元素，避免列表异步排序后点击到另一个职位。"""
-        return self.get_page().run_js("""
-            const [selector, jobId] = arguments;
-            return [...document.querySelectorAll(selector)].find(card => {
-                const link = card.querySelector('a[href*="/job_detail/"]');
-                return link && new URL(link.href, location.href).pathname
-                    === '/job_detail/' + jobId + '.html';
-            }) || null;
-        """, job_card_selector, job_id)
-
-    def _locate_job_card(self, job: dict, timeout: float):
-        """返回来源列表并有限滚动查找目标；消失的职位按失败处理。"""
-        page = self.get_page()
-        source_url = job.get('_searchUrl') or self._last_search_url or page.url
-        parsed = urlparse(source_url)
-        if parsed.hostname != 'www.zhipin.com' or parsed.path != '/web/geek/jobs':
-            raise ValueError('缺少职位来源搜索页，请先调用 get_job_list()。')
-        if page.url != source_url:
-            self.ensure_available()
-            page.get(source_url)
-            self._detail_list_exhausted = False
-
-        deadline = monotonic() + timeout
-        previous_ids = set()
-        empty_scrolls = 0
-        scrolls = 0
-        next_scroll = monotonic() + 1
-        while monotonic() < deadline:
-            self._ensure_detail_available(page)
-            element = self._find_job_card_element(str(job['encryptJobId']))
-            if element:
-                return element
-            if self._detail_list_exhausted:
-                return None
-
-            ids = {card['id'] for card in self._job_list_snapshot()}
-            if ids and monotonic() >= next_scroll:
-                empty_scrolls = empty_scrolls + 1 if ids == previous_ids else 0
-                if (empty_scrolls >= max_empty_scrolls
-                        or scrolls >= job.get('_searchMaxPages', max_joblist_pages)):
-                    self._detail_list_exhausted = True
-                    return None
-                previous_ids = ids
-                # 鼠标位于最后一张卡片上，兼容页面滚动和列表自身的滚动容器。
-                last = page.ele('css:' + job_card_selector, index=-1, timeout=0)
-                if last:
-                    last.scroll.to_see()
-                    page.actions.move_to(last).scroll(800, 0)
-                scrolls += 1
-                next_scroll = monotonic() + 2
-            sleep(0.25)
-        return None
 
     def _ensure_detail_available(self, page) -> None:
         """详情读取期间立即停止验证、访问限制或登录失效，不自动重试。"""
@@ -784,6 +720,7 @@ class BrowserManager:
             raise AccessRestricted('登录已失效，请人工登录后重试。')
         if self._has_login_entry(page):
             raise AccessRestricted('页面要求登录，请人工登录后重试。')
+
 
     @staticmethod
     def _check_detail_responses(page) -> None:
@@ -802,6 +739,7 @@ class BrowserManager:
                     continue
             if isinstance(body, dict) and str(body.get('code')) == '36':
                 raise AccessRestricted('职位页面请求触发 code=36，已停止详情获取。')
+
 
     @staticmethod
     def _read_job_detail_dom(page) -> dict:
@@ -844,6 +782,7 @@ class BrowserManager:
             return {};
         """, json.dumps(job_detail_container_selectors), json.dumps(job_detail_body_selectors)) or {}
 
+
     @staticmethod
     def _detail_matches_job(detail: dict, job: dict) -> bool:
         """必须是目标职位的完整标题和 ID，防止短标题前缀及旧详情误匹配。"""
@@ -856,49 +795,29 @@ class BrowserManager:
             and str(detail.get('description') or '').strip()
         )
 
+
     def get_job_card(self, job: dict, timeout: float = 20) -> dict | None:
-        """按职位 ID 点击列表卡片，读取 DOM 后合并到原摘要。
+        """在后台标签页打开职位详情，读取 DOM 后合并到原摘要。
 
         保留 encryptJobId/securityId/lid 等下游字段；不伪造网页未提供的
-        friendStatus 等字段。普通超时返回 None，登录或风控异常向上抛出。
+        friendStatus 等字段。主搜索页保持不动；普通超时返回 None，登录
+        或风控异常向上抛出并保留问题标签页供人工处理。
         """
         if not job.get('encryptJobId') or not job.get('jobName'):
             return None
         page = self.get_page()
-        element = self._locate_job_card(job, timeout)
-        if not element:
-            logger.warning('来源列表中未找到职位: title=%s', job.get('jobName', ''))
-            return None
-
-        source_url = page.url
-        original_tabs = set(page.tab_ids)
-        detail_page = page
-        listening_pages = [page]
+        job_id = quote(str(job['encryptJobId']), safe='')
+        detail_url = f'https://www.zhipin.com/job_detail/{job_id}.html'
+        detail_page = page.new_tab(background=True)
         blocked = False
-        page.listen.start(targets=['/wapi/zpgeek/'], is_regex=False)
+        detail_page.listen.start(targets=['/wapi/zpgeek/'], is_regex=False)
         try:
-            element.click(by_js=False)
+            detail_page.get(detail_url)
+            detail_page.wait.load_start()
             deadline = monotonic() + timeout
             previous = None
             while monotonic() < deadline:
-                self._check_detail_responses(page)
-                # 某些版本会新开详情标签，只接管本次点击产生的目标职位标签。
-                if detail_page is page:
-                    for tab_id in set(page.tab_ids) - original_tabs:
-                        tab = page.get_tab(tab_id)
-                        target = urlparse(tab.url)
-                        is_detail = target.path == f"/job_detail/{job['encryptJobId']}.html"
-                        is_block = (
-                            target.path in ('/403.html', '/web/passport/zp/verify.html')
-                            or target.path.startswith('/web/user/')
-                        )
-                        if target.hostname == 'www.zhipin.com' and (is_detail or is_block):
-                            detail_page = tab
-                            detail_page.listen.start(targets=['/wapi/zpgeek/'], is_regex=False)
-                            listening_pages.append(detail_page)
-                            break
-                if detail_page is not page:
-                    self._check_detail_responses(detail_page)
+                self._check_detail_responses(detail_page)
                 self._ensure_detail_available(detail_page)
                 detail = self._read_job_detail_dom(detail_page)
                 if self._detail_matches_job(detail, job):
@@ -915,27 +834,23 @@ class BrowserManager:
                 else:
                     previous = None
                 sleep(0.25)
-            logger.warning('点击后详情未匹配或加载超时: title=%s timeout=%s', job['jobName'], timeout)
+            logger.warning('职位详情未匹配或加载超时: title=%s timeout=%s', job['jobName'], timeout)
             return None
         except (VerificationRequired, AccessRestricted):
             blocked = True
             raise
         finally:
-            for listening_page in listening_pages:
-                try:
-                    listening_page.listen.stop()
-                except Exception:
-                    logger.debug('停止详情请求观测失败', exc_info=True)
-            # 风控页面保持原样供人工查看；正常侧栏无需刷新列表。
+            try:
+                detail_page.listen.stop()
+            except Exception:
+                logger.debug('停止详情请求观测失败', exc_info=True)
+            # 风控页面保持原样供人工查看；正常详情标签读取后立即关闭。
             if not blocked:
-                if detail_page is not page:
-                    detail_page.close()
-                elif page.url != source_url:
-                    page.back()
-                    self._detail_list_exhausted = False
+                detail_page.close()
+
 
     def get_job_cards(self, jobs: list[dict], interval: tuple[float, float] = (1, 2)) -> list[dict | None]:
-        """逐个点击并读取职位详情，保留顺序和间隔；风控异常立即终止批次。
+        """逐个读取职位详情，保留顺序和间隔；风控异常立即终止批次。
 
         返回:
             与 jobs 等长的列表，每项是 jobCard 字典或 None（失败的职位）。
@@ -971,12 +886,48 @@ class BrowserManager:
             cards.append(card)
         return cards
 
+
     def _read_bst(self) -> str:
         """取 bst cookie，投递接口要求放进 Zp_token 头。"""
         for cookie in self.get_page().cookies():
             if cookie.get('name') == 'bst':
                 return cookie.get('value', '')
         return ''
+
+    def _get_push_page(self):
+        """获取复用的后台投递标签页，不切换用户当前正在看的页面。"""
+        if self._push_page is not None:
+            try:
+                # 访问 url 是轻量的存活检查；标签页被用户或浏览器关闭时会抛异常。
+                self._push_page.url
+                return self._push_page
+            except Exception:
+                logger.info("投递后台标签页已失效，将重新创建")
+                self._push_page = None
+
+        page = self.get_page()
+        self._push_page = page.new_tab(
+            'https://www.zhipin.com/',
+            background=True,
+        )
+        self._push_page.wait.load_start()
+        return self._push_page
+
+    @staticmethod
+    def _parse_push_payload(raw) -> dict:
+        """兼容浏览器脚本返回的字符串、字节串或已解析字典。"""
+        if isinstance(raw, dict):
+            payload = raw
+        else:
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            if not isinstance(raw, str) or not raw.strip():
+                raise ValueError('投递接口未返回有效响应')
+            payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError('投递接口响应不是 JSON 对象')
+        return payload
+
 
     _push_js = """
     async (url, token) => {
@@ -1007,31 +958,43 @@ class BrowserManager:
             return False, '未登录（bst cookie 为空）'
 
         url = f'{push_api}?securityId={security_id}&jobId={job_id}&lid={lid}'
-        page = self.get_page()
         try:
-            raw = page.run_async_js(self._push_js, url, token)
-            payload = json.loads(raw)
+            # run_async_js() 在当前 DrissionPage 版本不返回 Promise 结果；
+            # run_js() 会等待 async 函数完成并返回 fetch 的响应文本。
+            page = self._get_push_page()
+            raw = page.run_js(self._push_js, url, token)
+            payload = self._parse_push_payload(raw)
         except Exception as exc:
             return False, f'结果未知：{type(exc).__name__}: {exc}'
 
-        code = payload.get('code')
+        code = str(payload.get('code')).strip()
         message = payload.get('message') or ''
         remind = (
             ((payload.get('zpData') or {}).get('bizData') or {})
             .get('chatRemindDialog') or {}
         ).get('content') or ''
 
-        if code == 0 and message == 'Success':
-            return True, 'Success'
+        if code == '0':
+            return True, message or 'Success'
         if daily_limit_hint in remind:
-            return True, remind
+            return False, remind
         return False, remind or message or f'code={code}'
+
 
     def close(self):
         if self._page is not None:
             logger.info("正在关闭浏览器")
-            self._page.quit()
-            self._page = None
+            if self._push_page is not None:
+                try:
+                    self._push_page.close()
+                except Exception:
+                    logger.debug("关闭投递后台标签页失败", exc_info=True)
+                finally:
+                    self._push_page = None
+            try:
+                self._page.quit()
+            finally:
+                self._page = None
             # 关闭后复位就绪信号，避免后台线程误判浏览器仍然可用。
             self._ready.clear()
             logger.info("浏览器已关闭")

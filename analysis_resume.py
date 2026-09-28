@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import threading
 import time
-import zipfile
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -76,7 +78,7 @@ class ResumeParseResult:
 
 
 class ResumeAnalyzer:
-    """简历解析器，支持 PDF 与 DOCX。"""
+    """简历解析器，支持 PDF、DOCX，以及通过 LibreOffice 转换的 DOC。"""
 
     def __init__(
         self,
@@ -136,6 +138,8 @@ class ResumeAnalyzer:
             return "pdf"
         if suffix == ".docx":
             return "docx"
+        if suffix == ".doc":
+            return "doc"
         return "unknown"
 
     # ---------- 对外入口 ----------
@@ -148,7 +152,11 @@ class ResumeAnalyzer:
             raise ResumeUnsupportedError(f"不支持的简历格式: {suffix}")
 
         started = time.monotonic()
-        parser = self._analyze_pdf if file_type == "pdf" else self._analyze_docx
+        parser = {
+            "pdf": self._analyze_pdf,
+            "docx": self._analyze_docx,
+            "doc": self._analyze_doc,
+        }[file_type]
         result = self._run_with_timeout(parser)
 
         logger.info(
@@ -328,7 +336,7 @@ class ResumeAnalyzer:
         ]
         return "\n".join(parts).strip()
 
-    # ---------- DOCX ----------
+    # ---------- DOC / DOCX ----------
 
     @staticmethod
     def _import_docx() -> Any:
@@ -342,6 +350,8 @@ class ResumeAnalyzer:
 
     def _check_docx_magic(self) -> None:
         """DOCX 本质是 zip，用压缩包结构做真实性校验，拦截伪装后缀。"""
+        import zipfile
+
         try:
             with zipfile.ZipFile(self.resume_file) as zf:
                 names = zf.namelist()
@@ -354,6 +364,70 @@ class ResumeAnalyzer:
             raise ResumeUnsupportedError(
                 f"DOCX 缺少 word/document.xml，可能是 .doc 等旧格式: {self.resume_file}"
             )
+
+    @staticmethod
+    def _find_libreoffice() -> str | None:
+        """查找用于把旧版 DOC 转成 DOCX 的 LibreOffice 命令。"""
+        candidates = [
+            shutil.which("soffice"),
+            shutil.which("libreoffice"),
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        ]
+        return next(
+            (candidate for candidate in candidates if candidate and Path(candidate).is_file()),
+            None,
+        )
+
+    def _analyze_doc(self) -> ResumeParseResult:
+        """借助 LibreOffice 将旧版 DOC 转成纯文本。"""
+        office = self._find_libreoffice()
+        if not office:
+            raise ResumeDependencyError(
+                "解析旧版 DOC 简历需要安装 LibreOffice，"
+                "安装后重试，或将文件另存为 DOCX。"
+            )
+
+        with tempfile.TemporaryDirectory(prefix="boss-agent-doc-") as output_dir:
+            command = [
+                office,
+                "--headless",
+                "--convert-to",
+                "txt:Text",
+                "--outdir",
+                output_dir,
+                str(self.resume_file),
+            ]
+            command.insert(1, f"-env:UserInstallation={(Path(output_dir) / 'lo-profile').as_uri()}")
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(1.0, self.timeout - 1),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ResumeTimeoutError(
+                    f"DOC 转换超时（>{self.timeout - 1:.0f}s）: {self.resume_file}"
+                ) from exc
+            except OSError as exc:
+                raise ResumeDependencyError(
+                    "无法启动 LibreOffice 解析旧版 DOC，"
+                    "请将文件另存为 DOCX 后重试。"
+                ) from exc
+
+            converted = Path(output_dir) / f"{self.resume_file.stem}.txt"
+            if completed.returncode != 0 or not converted.is_file():
+                raise ResumeParseError(
+                    "旧版 DOC 转换失败，请将文件另存为 DOCX 后重试。"
+                )
+            if converted.stat().st_size > self.max_file_size:
+                raise ResumeFileError("DOC 转换后的文本过大，无法安全解析。")
+            try:
+                text = converted.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError as exc:
+                raise ResumeParseError("旧版 DOC 转换结果无法读取。") from exc
+            return self._finalize(text, "doc", [])
 
     def _analyze_docx(self) -> ResumeParseResult:
         docx = self._import_docx()

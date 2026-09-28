@@ -16,16 +16,22 @@ logger = get_logger(__name__)
 
 def match_job_content(state) -> dict:
     """对详情卡片执行排除过滤和批量向量匹配。"""
-    if state.pipeline_processed:
-        return {"status": state.status, "working": state.working}
+    # search_jobs 已经在详情抓取线程中完成批量匹配；
+    # 这里保留独立节点，供流程状态和旧快照恢复使用，避免重复调用向量服务。
+    if state.matched_jobs:
+        return {
+            "result": f"排除后匹配到 {len(state.matched_jobs)} 个职位",
+            "status": "matched",
+        }
     cards = state.job_cards
     if not cards:
         return {"matched_jobs": [], "status": "no_cards", "working": False}
     try:
         excluded_keywords = state.search_params.exclude_keywords
+        match_query = state.match_query or state.user_input
         matched = match_card_batch(
             cards,
-            state.user_input,
+            match_query,
             excluded_keywords,
             search_params=state.search_params,
         )
@@ -55,21 +61,35 @@ def match_job_content(state) -> dict:
 
 def push_jobs(browser, state, browser_io_lock) -> dict:
     """向匹配职位投递简历。"""
-    if state.pipeline_processed:
+    # 兼容已完成投递的旧任务快照，恢复任务时不能重复投递。
+    if state.pipeline_processed and state.push_results:
         return {"status": state.status, "working": state.working}
     matched = state.matched_jobs
     if not matched:
-        return {"push_results": [], "status": "no_matched", "working": False}
+        return {
+            "push_results": [],
+            "result": (
+                f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
+                "没有可投递的匹配职位"
+            ),
+            "status": "completed",
+            "working": False,
+            "pipeline_processed": True,
+        }
     try:
-        results = push_matches(browser, matched, browser_io_lock)
+        results = push_matches(browser, matched, browser_io_lock, state.task_id)
         ok = sum(1 for result in results if result.get("success"))
         logger.info("职位投递完成: task_id=%s success=%s total=%s", state.task_id, ok, len(matched))
         return {
             "push_results": results,
-            "result": f"投递 {ok}/{len(matched)} 个职位",
+            "result": (
+                f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
+                f"匹配 {len(matched)} 个，投递成功 {ok} 个"
+            ),
             "status": "completed",
             "working": False,
             "error": "",
+            "pipeline_processed": True,
         }
     except Exception as exc:
         logger.exception("职位投递失败: task_id=%s", state.task_id)
@@ -149,7 +169,7 @@ def push_matches(
 
 
 def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
-    """抓取详情、匹配并投递职位，返回原 search_jobs 的状态更新。"""
+    """抓取职位详情并完成批量匹配；投递由后续 push_jobs 节点执行。"""
     p = state.search_params
     excluded = {c.strip().rstrip("市") for c in p.exclude_location}
     jobs_by_key = {}
@@ -160,7 +180,7 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
     producer_error = []
     consumer_error = []
     matched = []
-    push_results = []
+    match_query = state.match_query or state.user_input
 
     def fetch_detail(job):
         if stop_event.is_set():
@@ -194,7 +214,7 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                         matched.extend(
                             match_card_batch(
                                 batch,
-                                state.user_input,
+                                match_query,
                                 p.exclude_keywords,
                                 search_params=p,
                             )
@@ -206,7 +226,7 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                 matched.extend(
                     match_card_batch(
                         batch,
-                        state.user_input,
+                        match_query,
                         p.exclude_keywords,
                         search_params=p,
                     )
@@ -282,23 +302,18 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                 "error": f"向量匹配失败: {type(exc).__name__}: {exc}", "status": "match_failed", "working": False}
 
     matched.sort(key=lambda item: item.get("score", 0), reverse=True)
-    try:
-        push_results = push_matches(browser, matched, browser_io_lock, state.task_id) if matched else []
-    except (VerificationRequired, AccessRestricted) as exc:
-        push_results = getattr(exc, "partial_results", push_results)
-        return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched,
-                "push_results": push_results, "result": f"职位处理已停止，已匹配 {len(matched)} 个，已投递 {len(push_results)} 个",
-                "error": f"投递失败: {type(exc).__name__}: {exc}", "status": "push_failed", "working": False}
-    except Exception as exc:
-        push_results = getattr(exc, "partial_results", push_results)
-        logger.exception("职位投递失败: task_id=%s", state.task_id)
-        return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched,
-                "push_results": push_results, "result": f"职位处理已停止，已匹配 {len(matched)} 个，已投递 {len(push_results)} 个",
-                "error": f"投递失败: {type(exc).__name__}: {exc}", "status": "push_failed", "working": False}
-
-    ok = sum(1 for result in push_results if result.get("success"))
     jobs = list(jobs_by_key.values())
-    logger.info("职位管线完成: task_id=%s jobs=%s cards=%s matched=%s pushed=%s", state.task_id, len(jobs), len(cards), len(matched), ok)
-    return {"jobs": jobs, "job_cards": cards, "matched_jobs": matched, "push_results": push_results,
-            "result": f"找到 {len(jobs)} 个职位，获取 {len(cards)} 个详情，匹配 {len(matched)} 个，投递成功 {ok} 个",
-            "status": "completed", "working": False, "pipeline_processed": True}
+    logger.info(
+        "职位读取与匹配完成: task_id=%s jobs=%s cards=%s matched=%s",
+        state.task_id,
+        len(jobs),
+        len(cards),
+        len(matched),
+    )
+    return {
+        "jobs": jobs,
+        "job_cards": cards,
+        "matched_jobs": matched,
+        "result": f"找到 {len(jobs)} 个职位，获取 {len(cards)} 个详情，匹配 {len(matched)} 个",
+        "status": "search_completed",
+    }

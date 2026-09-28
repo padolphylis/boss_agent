@@ -161,6 +161,50 @@ class ConversationStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def conversation_task_snapshots(self, conversation_id: str) -> list[dict[str, Any]]:
+        """返回会话关联的任务快照，删除会话时用于清理任务和临时文件。"""
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            return []
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT task_id, conversation_id, state_json, status, updated_at "
+                "FROM task_snapshots WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["state"] = json.loads(item.pop("state_json"))
+            result.append(item)
+        return result
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """删除会话及其消息、任务快照；返回会话是否存在。"""
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            return False
+        with self._lock, self._db:
+            exists = self._db.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if not exists:
+                return False
+            self._db.execute(
+                "DELETE FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            self._db.execute(
+                "DELETE FROM task_snapshots WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            self._db.execute(
+                "DELETE FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+        return True
+
     def save_task_snapshot(self, task_id: str, state: dict[str, Any], conversation_id: str = "") -> None:
         with self._lock, self._db:
             self._db.execute(
@@ -198,7 +242,7 @@ class ConversationStore:
         with self._lock:
             rows = self._db.execute(
                 "SELECT task_id, conversation_id, state_json, status, updated_at "
-                "FROM task_snapshots WHERE status NOT IN ('completed', 'need_input') "
+                "FROM task_snapshots WHERE status != 'completed' "
                 "ORDER BY updated_at DESC LIMIT ?",
                 (max(1, min(int(limit), 100)),),
             ).fetchall()

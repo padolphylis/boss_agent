@@ -7,18 +7,24 @@
   <style>
     :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #172033; background: #f6f7fb; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: #f6f7fb; }
+    body { height: 100vh; margin: 0; overflow: hidden; background: #f6f7fb; }
     button, textarea { font: inherit; }
-    .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
-    .sidebar { display: flex; flex-direction: column; padding: 26px 16px; background: #fff; border-right: 1px solid #e9ebf2; }
+    .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; min-height: 0; }
+    .sidebar { display: flex; flex-direction: column; min-height: 0; padding: 26px 16px; overflow-y: auto; background: #fff; border-right: 1px solid #e9ebf2; }
     .brand { display: flex; align-items: center; gap: 10px; padding: 0 12px 30px; font-weight: 700; font-size: 18px; }
     .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #fff; background: #5b67e8; font-size: 15px; }
     .new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px 14px; color: #fff; background: #5965e8; border: 0; border-radius: 8px; cursor: pointer; }
     .conversation-list { display: flex; flex-direction: column; gap: 5px; margin-top: 20px; overflow-y: auto; }
-    .conversation-item { padding: 10px 12px; color: #687187; background: transparent; border: 0; border-radius: 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-    .conversation-item:hover, .conversation-item.active { color: #4653d0; background: #f0f1ff; }
-    .main { display: flex; flex-direction: column; min-width: 0; }
-    .topbar { display: flex; align-items: center; justify-content: space-between; height: 72px; padding: 0 42px; background: #fff; border-bottom: 1px solid #e9ebf2; }
+    .conversation-row { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
+    .conversation-row:hover, .conversation-row.active { background: #f0f1ff; }
+    .conversation-item { min-width: 0; flex: 1; padding: 10px 8px 10px 12px; color: #687187; background: transparent; border: 0; border-radius: 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .conversation-item:hover, .conversation-row.active .conversation-item { color: #4653d0; }
+    .conversation-delete { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; margin-right: 4px; padding: 0; color: #9aa1b0; background: transparent; border: 0; border-radius: 5px; font-size: 17px; line-height: 1; cursor: pointer; opacity: 0; }
+    .conversation-row:hover .conversation-delete, .conversation-row.active .conversation-delete, .conversation-delete:focus-visible { opacity: 1; }
+    .conversation-delete:hover { color: #c55353; background: #fff0f0; }
+    .conversation-delete:disabled { cursor: wait; opacity: .35; }
+    .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; min-height: 0; overflow: hidden; }
+    .topbar { display: flex; flex: 0 0 72px; align-items: center; justify-content: space-between; height: 72px; padding: 0 42px; background: #fff; border-bottom: 1px solid #e9ebf2; }
     .topbar h1 { margin: 0; font-size: 17px; }
     .topbar-actions { display: flex; align-items: center; gap: 18px; }
     .settings-button { padding: 7px 10px; color: #5965e8; background: #f0f1ff; border: 0; border-radius: 7px; cursor: pointer; }
@@ -40,8 +46,9 @@
     .settings-toggle { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; line-height: 1.5; cursor: pointer; }
     .settings-toggle input { width: auto; margin: 2px 0 0; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #29bf83; }
-    .workspace { display: grid; grid-template-columns: minmax(0, 760px) 280px; gap: 34px; width: min(1080px, calc(100% - 84px)); margin: 0 auto; padding: 54px 0 35px; flex: 1; }
-    .conversation { display: flex; flex-direction: column; min-height: 650px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 760px) 280px; gap: 34px; width: min(1080px, calc(100% - 84px)); height: calc(100vh - 72px); min-height: 0; margin: 0 auto; padding: 54px 0 35px; flex: 0 0 auto; overflow: hidden; }
+    .conversation { display: flex; flex-direction: column; min-height: 0; height: calc(100vh - 161px); overflow: hidden; }
+    .conversation-history { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding-right: 8px; scrollbar-gutter: stable; }
     .welcome { margin: auto 0 30px; }
     .eyebrow { margin: 0 0 12px; color: #5965e8; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
     .welcome h2 { margin: 0 0 12px; font-size: 34px; }
@@ -50,7 +57,14 @@
     .message { max-width: 86%; padding: 13px 16px; border-radius: 8px; line-height: 1.65; font-size: 14px; white-space: pre-wrap; }
     .message.user { align-self: flex-end; color: #fff; background: #5965e8; }
     .message.assistant { align-self: flex-start; color: #4d566a; background: #fff; border: 1px solid #e8eaf1; }
-    .composer { padding: 12px; background: #fff; border: 1px solid #dfe2ec; border-radius: 8px; box-shadow: 0 8px 24px rgba(39, 47, 79, .06); }
+    .task-notice { display: none; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 11px 13px; border-left: 3px solid #9aa1b0; color: #596276; background: #fff; font-size: 12px; line-height: 1.55; }
+    .task-notice.visible { display: flex; }
+    .task-notice.login { border-color: #d69e2e; color: #7a5d11; background: #fff9e8; }
+    .task-notice.input { border-color: #5965e8; color: #4653d0; background: #f3f4ff; }
+    .task-notice.error { border-color: #d35b5b; color: #a43f3f; background: #fff2f2; }
+    .task-notice-title { flex: 0 0 auto; font-weight: 700; }
+    .task-notice-message { min-width: 0; }
+    .composer { flex: 0 0 auto; padding: 12px; background: #fff; border: 1px solid #dfe2ec; border-radius: 8px; box-shadow: 0 8px 24px rgba(39, 47, 79, .06); }
     .composer textarea { display: block; width: 100%; min-height: 74px; padding: 5px 4px; resize: none; color: #263047; border: 0; outline: 0; }
     .resume-input { display: block; width: 100%; margin-top: 8px; padding: 7px 4px; color: #263047; border: 0; border-top: 1px solid #eef0f5; outline: 0; font-size: 12px; }
     .resume-input::placeholder { color: #a4aab8; }
@@ -62,6 +76,19 @@
     .side-panel { align-self: start; padding-top: 4px; }
     .side-panel h3 { margin: 0 0 6px; font-size: 14px; }
     .side-panel > p { margin: 0 0 24px; color: #9299a8; font-size: 12px; line-height: 1.6; }
+    .resume-status { display: none; margin: 8px 4px 0; padding-top: 10px; border-top: 1px solid #eef0f5; }
+    .resume-status.visible { display: block; }
+    .resume-status-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+    .resume-status-heading h3 { margin: 0; }
+    .resume-status-badge { flex: 0 0 auto; padding: 3px 7px; color: #687187; background: #f0f1f5; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    .resume-status-badge.parsing { color: #5965e8; background: #f0f1ff; }
+    .resume-status-badge.parsed { color: #218b63; background: #e9f8f1; }
+    .resume-status-badge.error { color: #c55353; background: #fff0f0; }
+    .resume-file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .resume-file-type { display: grid; place-items: center; flex: 0 0 auto; width: 30px; height: 34px; color: #5965e8; background: #f0f1ff; border: 1px solid #dfe2ff; border-radius: 5px; font-size: 9px; font-weight: 700; }
+    .resume-file-info { min-width: 0; }
+    .resume-file-name { display: block; overflow: hidden; color: #465166; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .resume-file-message { display: block; margin-top: 3px; color: #9299a8; font-size: 11px; line-height: 1.4; }
     .parsed-result { display: none; margin: 24px 0 28px; padding-top: 18px; border-top: 1px solid #e8eaf1; }
     .parsed-result.visible { display: block; }
     .parsed-result h3 { margin-bottom: 12px; }
@@ -80,7 +107,7 @@
     .step.done { color: #647083; }
     .step.done .step-icon { color: #fff; background: #2bb982; border-color: #2bb982; }
     .tip { margin-top: 38px; padding: 14px; color: #747d90; background: #fff; border: 1px solid #e8eaf1; border-radius: 8px; font-size: 12px; line-height: 1.6; }
-    @media (max-width: 850px) { .app { grid-template-columns: 1fr; } .sidebar { display: none; } .topbar { padding: 0 20px; } .workspace { display: block; width: min(100% - 40px, 760px); padding-top: 30px; } .conversation { min-height: calc(100vh - 120px); } .side-panel { display: none; } .welcome h2 { font-size: 28px; } }
+    @media (max-width: 850px) { .app { grid-template-columns: 1fr; } .sidebar { display: none; } .topbar { padding: 0 20px; } .workspace { display: block; width: min(100% - 40px, 760px); height: calc(100vh - 72px); padding-top: 30px; } .conversation { height: calc(100vh - 137px); } .side-panel { display: none; } .welcome h2 { font-size: 28px; } }
   </style>
 </head>
 <body>
@@ -94,9 +121,12 @@
       <header class="topbar"><h1>职位搜索</h1><div class="topbar-actions"><button class="settings-button" id="open-settings" type="button">设置</button><div class="connection"><span class="dot"></span>服务已连接</div></div></header>
       <div class="workspace">
         <section class="conversation">
-          <div class="welcome" id="welcome"><p class="eyebrow">JOB ASSISTANT</p><h2>你好，今天想找什么工作？</h2><p>告诉我你的目标城市、职位方向和期望条件，我会帮你整理搜索任务。</p></div>
-          <div class="messages" id="messages"></div>
-          <form class="composer" id="chat-form"><textarea id="message" required maxlength="500" placeholder="输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师"></textarea><input class="resume-input" id="resume" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><div class="composer-foot"><span>Enter 发送，Shift + Enter 换行</span><button class="send" id="send" type="submit" aria-label="发送">↑</button></div></form>
+          <div class="conversation-history" id="conversation-history">
+          <div class="welcome" id="welcome"><p class="eyebrow">JOB ASSISTANT</p><h2>你好，今天想找什么工作？</h2><p>你可以搜索职位、分析简历或职位信息、根据条件推荐工作，也可以直接聊聊求职。</p></div>
+            <div class="messages" id="messages"></div>
+            <div class="task-notice" id="task-notice" role="status" aria-live="polite"><strong class="task-notice-title" id="task-notice-title"></strong><span class="task-notice-message" id="task-notice-message"></span></div>
+          </div>
+          <form class="composer" id="chat-form"><textarea id="message" required maxlength="500" placeholder="输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师"></textarea><input class="resume-input" id="resume" type="file" accept=".pdf,.docx,.doc,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><section class="resume-status" id="resume-status" aria-live="polite"><div class="resume-status-heading"><h3>简历文件</h3><span class="resume-status-badge" id="resume-status-badge">待解析</span></div><div class="resume-file"><span class="resume-file-type" id="resume-file-type">FILE</span><div class="resume-file-info"><strong class="resume-file-name" id="resume-file-name"></strong><small class="resume-file-message" id="resume-file-message"></small></div></div></section><div class="composer-foot"><span>Enter 发送，Shift + Enter 换行</span><button class="send" id="send" type="submit" aria-label="发送">↑</button></div></form>
         </section>
         <aside class="side-panel"><h3>任务流程</h3><p>任务会按照以下步骤逐步执行，结果将实时显示在对话中。</p><section class="parsed-result" id="parsed-result"><h3>解析结果</h3><p>请核对以下条件是否符合你的需求。</p><dl class="parsed-fields" id="parsed-fields"></dl></section><div class="steps" id="steps"><div class="step active"><span class="step-icon">1</span><span>初始化任务</span></div><div class="step"><span class="step-icon">2</span><span>检查登录状态</span></div><div class="step"><span class="step-icon">3</span><span>读取职位页面</span></div><div class="step"><span class="step-icon">4</span><span>分析职位匹配度</span></div><div class="step"><span class="step-icon">5</span><span>等待人工确认</span></div><div class="step"><span class="step-icon">6</span><span>执行投递</span></div></div><div class="tip">涉及投递的操作将在执行前等待你的确认。</div></aside>
       </div>
@@ -114,21 +144,39 @@
     const conversationList = document.querySelector('#conversation-list');
     const welcome = document.querySelector('#welcome');
     const steps = [...document.querySelectorAll('.step')];
+    const taskNotice = document.querySelector('#task-notice');
+    const taskNoticeTitle = document.querySelector('#task-notice-title');
+    const taskNoticeMessage = document.querySelector('#task-notice-message');
+    const resumeStatus = document.querySelector('#resume-status');
+    const resumeStatusBadge = document.querySelector('#resume-status-badge');
+    const resumeFileType = document.querySelector('#resume-file-type');
+    const resumeFileName = document.querySelector('#resume-file-name');
+    const resumeFileMessage = document.querySelector('#resume-file-message');
     const parsedResult = document.querySelector('#parsed-result');
     const parsedFields = document.querySelector('#parsed-fields');
     const settingsDialog = document.querySelector('#settings-dialog');
     const settingsForm = document.querySelector('#settings-form');
     const settingsMessage = document.querySelector('#settings-message');
     const settingsFields = ['chat_openai_api_key', 'chat_openai_base_url', 'chat_openai_model', 'embedding_openai_api_key', 'embedding_openai_base_url', 'embedding_openai_model', 'qdrant_api_key', 'qdrant_url', 'qdrant_path', 'qdrant_collection'];
+    const maxResumeSize = 30 * 1024 * 1024;
     // 首次发送时允许为空，由后端创建会话并在 SSE 结果中返回 ID。
     let conversationId = '';
     let currentReply = null;
     let pendingTaskId = '';
+    let currentIntent = '';
+    let currentTaskFailed = false;
+    let loadingConversation = false;
 
     document.querySelector('#new-chat').addEventListener('click', createNewConversation);
 
+    function updateConversationControls() {
+      conversationList.querySelectorAll('button').forEach((button) => {
+        button.disabled = send.disabled || loadingConversation;
+      });
+    }
+
     async function createNewConversation() {
-      if (send.disabled) return;
+      if (send.disabled || loadingConversation) return;
       const response = await fetch('/api/conversations', {method: 'POST'});
       const data = await response.json();
       conversationId = data.conversation_id;
@@ -136,7 +184,12 @@
       welcome.hidden = false;
       currentReply = null;
       pendingTaskId = '';
+      currentIntent = '';
+      currentTaskFailed = false;
       setStep(0);
+      clearTaskNotice();
+      resume.value = '';
+      renderResumeStatus(null);
       input.focus();
       await loadConversations();
     }
@@ -146,28 +199,96 @@
       const data = await response.json();
       conversationList.replaceChildren();
       data.conversations.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = `conversation-row${item.conversation_id === conversationId ? ' active' : ''}`;
         const button = document.createElement('button');
-        button.className = `conversation-item${item.conversation_id === conversationId ? ' active' : ''}`;
+        button.className = 'conversation-item';
         button.textContent = item.title || '新对话';
         button.title = item.title || '新对话';
         button.addEventListener('click', () => loadConversation(item.conversation_id));
-        conversationList.appendChild(button);
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'conversation-delete';
+        deleteButton.type = 'button';
+        deleteButton.textContent = '×';
+        deleteButton.title = '删除对话';
+        deleteButton.setAttribute('aria-label', `删除对话：${item.title || '新对话'}`);
+        deleteButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          deleteConversation(item);
+        });
+        row.append(button, deleteButton);
+        conversationList.appendChild(row);
       });
+      updateConversationControls();
+    }
+
+    async function deleteConversation(item) {
+      if (send.disabled) {
+        renderTaskNotice('error', '任务进行中', '请等待当前任务结束后再删除会话。');
+        return;
+      }
+      const title = item.title || '新对话';
+      if (!window.confirm(`确定删除对话“${title}”吗？删除后消息和相关任务记录将无法恢复。`)) return;
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(item.conversation_id)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '删除对话失败');
+        if (conversationId === item.conversation_id) {
+          resetConversationView();
+        }
+        await loadConversations();
+      } catch (error) {
+        renderTaskNotice('error', '删除失败', error.message || '删除对话失败，请重试。');
+      }
+    }
+
+    function resetConversationView() {
+      conversationId = '';
+      messages.replaceChildren();
+      welcome.hidden = false;
+      currentReply = null;
+      pendingTaskId = '';
+      currentIntent = '';
+      currentTaskFailed = false;
+      input.placeholder = '输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师';
+      setStep(0);
+      clearTaskNotice();
+      resume.value = '';
+      renderResumeStatus(null);
+      renderParsedResult(null);
+      updateConversationControls();
+      input.focus();
     }
 
     async function loadConversation(id) {
-      if (send.disabled) return;
-      const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages`);
-      const data = await response.json();
-      if (!response.ok) return;
-      conversationId = id;
-      messages.replaceChildren();
-      welcome.hidden = data.messages.length > 0;
-      pendingTaskId = '';
-      data.messages.forEach((item) => addMessage(item.content, item.direction === 'incoming' ? 'user' : 'assistant'));
-      setStep(0);
-      renderParsedResult(null);
-      await loadConversations();
+      if (send.disabled || loadingConversation) return;
+      loadingConversation = true;
+      updateConversationControls();
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '读取对话失败');
+        conversationId = id;
+        messages.replaceChildren();
+        welcome.hidden = data.messages.length > 0;
+        pendingTaskId = '';
+        currentIntent = '';
+        currentTaskFailed = false;
+        resume.value = '';
+        clearTaskNotice();
+        data.messages.forEach((item) => addMessage(item.content, item.direction === 'incoming' ? 'user' : 'assistant'));
+        setStep(0);
+        renderResumeStatus(null);
+        renderParsedResult(null);
+        await loadConversations();
+      } catch (error) {
+        renderTaskNotice('error', '加载失败', error.message || '读取对话失败，请重试。');
+      } finally {
+        loadingConversation = false;
+        updateConversationControls();
+      }
     }
 
     loadConversations();
@@ -231,12 +352,23 @@
       event.preventDefault();
       const text = input.value.trim();
       if (!text || send.disabled) return;
+      const selectedResume = resume.files[0];
+      if (selectedResume && selectedResume.size > maxResumeSize) {
+        renderResumeStatus(selectedResume.name, 'error', '文件超过 30MB，请压缩文件后重试');
+        return;
+      }
       welcome.hidden = true;
       addMessage(text, 'user');
       input.value = '';
       send.disabled = true;
+      resume.disabled = true;
+      updateConversationControls();
+      currentIntent = '';
+      currentTaskFailed = false;
+      clearTaskNotice();
       currentReply = addMessage('正在连接任务...', 'assistant');
       setStep(0);
+      renderResumeStatus(selectedResume ? selectedResume.name : null, selectedResume ? 'parsing' : 'none');
       try {
         const response = await fetch('/api/chat', {
           method: 'POST',
@@ -250,15 +382,17 @@
           })()
         });
         if (!response.ok || !response.body) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.error || '请求失败');
+          throw new Error(await readErrorResponse(response, `请求失败（HTTP ${response.status}）`));
         }
         await readSse(response.body);
       } catch (error) {
         currentReply.textContent = error.message || '暂时无法连接服务，请检查 Flask 服务是否已启动。';
+        if (selectedResume) renderResumeStatus(selectedResume.name, 'error');
         setStep(0);
       } finally {
         send.disabled = false;
+        resume.disabled = false;
+        updateConversationControls();
         currentReply = null;
       }
     });
@@ -277,53 +411,154 @@
       }
     }
 
+    async function readErrorResponse(response, fallback) {
+      const contentType = response.headers.get('content-type') || '';
+      const text = await response.text().catch(() => '');
+      if (contentType.includes('application/json')) {
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+        if (data.error) return data.error;
+      }
+      if (response.status === 413) {
+        return '上传请求超过大小限制。简历文件上限为 30MB，请压缩文件后重试。';
+      }
+      if (text.trim() && !text.trimStart().startsWith('<')) return text.trim();
+      return fallback;
+    }
+
     function handleSse(chunk) {
       const event = chunk.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
       const line = chunk.match(/^data:\s*(.+)$/m)?.[1];
       if (!line) return;
-      const data = JSON.parse(line);
+      let data;
+      try {
+        data = JSON.parse(line);
+      } catch {
+        currentReply && (currentReply.textContent = '服务返回了无法识别的状态，请重试。');
+        renderTaskNotice('error', '状态异常', '服务返回了无法识别的任务状态，请重试。');
+        return;
+      }
       if (event === 'status') {
+        if (data.resume_filename && data.resume_status) {
+          renderResumeStatus(data.resume_filename, data.resume_status);
+        } else if (data.resume_status === 'none') {
+          renderResumeStatus(null);
+        }
         // 终态(done)不清空气泡：result 事件已写入最终文案，覆盖会导致追问内容丢失
         if (data.stage !== 'done') {
           currentReply.textContent = data.message || data.stage || '处理中...';
         }
-        setStepForStage(data.stage);
+        if (data.action_required) {
+          renderTaskNotice('login', '需要登录', data.message);
+        } else if (data.stage === 'done') {
+          if (!currentTaskFailed && !pendingTaskId && currentIntent !== 'chat') {
+            clearTaskNotice();
+          }
+        } else if (data.severity === 'error') {
+          renderTaskNotice('error', '任务异常', data.message);
+        } else if (data.stage === 'wait_login' && data.status === 'login_verified') {
+          clearTaskNotice();
+        }
+        setStepForStage(data.stage, data.severity);
+      } else if (event === 'action_required') {
+        renderTaskNotice('login', '需要登录', data.message || '请完成登录后继续。');
       } else if (event === 'result') {
         conversationId = data.conversation_id || conversationId;
+        currentIntent = data.intent || '';
         currentReply.textContent = data.message || '任务完成';
-        renderParsedResult(data.search_params);
+        // 文件已经由服务端保存；清空控件，避免追问或下一次任务重复上传同一文件。
+        resume.value = '';
+        if (data.resume_filename && data.resume_status) {
+          renderResumeStatus(data.resume_filename, data.resume_status);
+        } else if (data.resume_status === 'none') {
+          renderResumeStatus(null);
+        }
+        renderParsedResult(
+          ['job_search', 'job_recommendation'].includes(data.intent)
+            ? data.search_params
+            : null
+        );
         loadConversations();
-        if (data.status === 'need_input') {
+        if (data.intent === 'chat') {
+          pendingTaskId = '';
+          currentTaskFailed = false;
+          clearTaskNotice();
+          setStep(0);
+        } else if (data.status === 'need_input') {
           pendingTaskId = data.task_id || '';
+          currentTaskFailed = false;
           input.placeholder = data.message || '请补充信息';
+          renderTaskNotice('input', '需要补充信息', data.message || '请补充信息后继续。');
           setStep(0);
         } else {
           pendingTaskId = '';
           input.placeholder = '输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师';
-          setStep(data.status && data.status.endsWith('_failed') ? 0 : 5);
+          const failed = data.severity === 'error'
+            || data.status === 'failed'
+            || data.status?.endsWith('_failed')
+            || data.status?.endsWith('_timeout');
+          currentTaskFailed = failed;
+          if (failed) {
+            renderTaskNotice('error', '任务未完成', data.message || '任务执行失败。');
+          } else {
+            clearTaskNotice();
+          }
+          const terminalStep = data.intent === 'job_recommendation' ? 4 : 5;
+          setStep(failed ? 0 : terminalStep);
         }
       } else if (event === 'error') {
         currentReply.textContent = data.message || '任务执行失败';
+        currentTaskFailed = true;
+        renderTaskNotice('error', '任务未完成', data.message || '任务执行失败。');
+        pendingTaskId = '';
+        if (resumeStatus.classList.contains('visible') &&
+            !resumeStatusBadge.classList.contains('parsed') &&
+            !resumeStatusBadge.classList.contains('error')) {
+          renderResumeStatus(resumeFileName.textContent, 'error');
+        }
         setStep(0);
       }
       currentReply.scrollIntoView({behavior: 'smooth', block: 'nearest'});
     }
 
-    function setStepForStage(stage) {
+    function setStepForStage(stage, severity = '') {
+      if (stage === 'done' && (currentTaskFailed || currentIntent === 'chat' || pendingTaskId)) {
+        setStep(0);
+        return;
+      }
+      if (severity === 'error') {
+        setStep(0);
+        return;
+      }
       const index = ({
         start: 0,
         analyze_intent: 0,
         analyze_resume: 0,
+        prepare_recommendation: 0,
+        analyze_content: 0,
         init_browser: 0,
         check_login: 1,
         wait_login: 1,
         search_jobs: 2,
         match_job_content: 4,
+        recommendation_result: 4,
         push_jobs: 5,
         completed: 5,
         done: 5
       })[stage];
       if (index !== undefined) setStep(index);
+    }
+
+    function renderTaskNotice(kind, title, message) {
+      taskNotice.className = `task-notice visible ${kind}`;
+      taskNoticeTitle.textContent = title;
+      taskNoticeMessage.textContent = message || '';
+    }
+
+    function clearTaskNotice() {
+      taskNotice.className = 'task-notice';
+      taskNoticeTitle.textContent = '';
+      taskNoticeMessage.textContent = '';
     }
 
     // 解析结果字段顺序与展示名称，空值统一提示“未指定”，方便用户核对解析是否正确。
@@ -344,6 +579,46 @@
       if (value === null || value === undefined || value === '') return '';
       return String(value);
     }
+
+    const resumeStatusLabels = {
+      selected: '待解析',
+      uploaded: '等待解析',
+      parsing: '解析中',
+      parsed: '已解析',
+      error: '解析失败',
+      skipped: '未解析',
+    };
+
+    const resumeStatusMessages = {
+      selected: '发送任务后开始解析文件',
+      uploaded: '文件已上传，等待解析',
+      parsing: '正在提取简历文本',
+      parsed: '文件内容已提取，可用于职位匹配',
+      error: '文件未能解析，请重新选择 PDF、DOCX 或 DOC',
+      skipped: '本次任务未使用简历内容',
+    };
+
+    function renderResumeStatus(filename, status = 'selected', message = '') {
+      if (!filename || status === 'none') {
+        resumeStatus.classList.remove('visible');
+        resumeFileName.textContent = '';
+        resumeFileMessage.textContent = '';
+        return;
+      }
+      const extension = filename.split('.').pop()?.toUpperCase() || 'FILE';
+      const normalizedStatus = resumeStatusLabels[status] ? status : 'selected';
+      resumeStatusBadge.className = `resume-status-badge ${normalizedStatus}`;
+      resumeStatusBadge.textContent = resumeStatusLabels[normalizedStatus];
+      resumeFileType.textContent = extension.slice(0, 4);
+      resumeFileName.textContent = filename;
+      resumeFileMessage.textContent = message || resumeStatusMessages[normalizedStatus];
+      resumeStatus.classList.add('visible');
+    }
+
+    resume.addEventListener('change', () => {
+      const file = resume.files[0];
+      renderResumeStatus(file ? file.name : null, file ? 'selected' : 'none');
+    });
 
     function renderParsedResult(params) {
       if (!params) {
