@@ -665,6 +665,23 @@ class BrowserManager:
         return self.check_login()
 
 
+    def wait_until_logged_in(
+        self,
+        timeout: float = 15,
+        initial_delay: float = 2,
+    ) -> bool:
+        """等待登录态同步完成，并连续确认当前会话仍然有效。"""
+        if initial_delay > 0:
+            sleep(initial_delay)
+        deadline = monotonic() + timeout
+        while monotonic() < deadline:
+            self.ensure_or_wait()
+            if self.check_login():
+                return True
+            sleep(1)
+        return False
+
+
     def job_key(self, job):
         """优先使用职位加密 ID,避免同一职位重复保存。"""
         return job.get('encryptJobId') or f"{job.get('jobName', '')}:{job.get('brandName', '')}:{job.get('lid', '')}"
@@ -745,11 +762,19 @@ class BrowserManager:
 
         listener_started = False
         try:
-            # 通过 URL 参数加载筛选条件。
+            if not self.wait_until_logged_in():
+                raise RuntimeError('登录状态未稳定，请完成登录后重试。')
+
+            # 通过 URL 参数重新加载筛选条件，避免登录页完成后继续使用旧页面状态。
+            page = self.get_page()
             page.listen.start(targets=[job_list_target], is_regex=False)
             listener_started = True
             page.get(search_url)
             page.wait.load_start()
+            sleep(2)
+            self.ensure_or_wait()
+            if not self.check_login():
+                raise RuntimeError('打开职位搜索页后登录状态失效，请重新登录。')
             has_more = True
             while has_more and len(pages) < max_pages:
                 self.ensure_available(page)
