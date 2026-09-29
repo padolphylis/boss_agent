@@ -242,7 +242,7 @@ class ConversationStore:
         with self._lock:
             rows = self._db.execute(
                 "SELECT task_id, conversation_id, state_json, status, updated_at "
-                "FROM task_snapshots WHERE status != 'completed' "
+                "FROM task_snapshots WHERE status NOT IN ('completed', 'cancelled') "
                 "ORDER BY updated_at DESC LIMIT ?",
                 (max(1, min(int(limit), 100)),),
             ).fetchall()

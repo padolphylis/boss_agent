@@ -73,6 +73,9 @@
     .composer-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; color: #a2a8b5; font-size: 11px; }
     .send { display: grid; place-items: center; width: 36px; height: 36px; color: #fff; background: #5965e8; border: 0; border-radius: 8px; cursor: pointer; }
     .send:disabled { opacity: .5; cursor: wait; }
+    .send.task-running { color: #596276; background: #f0f1f5; }
+    .send.task-running:hover:not(:disabled) { color: #4653d0; background: #f0f1ff; }
+    .send.task-paused { color: #fff; background: #5965e8; }
     .side-panel { align-self: start; padding-top: 4px; }
     .side-panel h3 { margin: 0 0 6px; font-size: 14px; }
     .side-panel > p { margin: 0 0 24px; color: #9299a8; font-size: 12px; line-height: 1.6; }
@@ -128,7 +131,7 @@
           </div>
           <form class="composer" id="chat-form"><textarea id="message" required maxlength="500" placeholder="输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师"></textarea><input class="resume-input" id="resume" type="file" accept=".pdf,.docx,.doc,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><section class="resume-status" id="resume-status" aria-live="polite"><div class="resume-status-heading"><h3>简历文件</h3><span class="resume-status-badge" id="resume-status-badge">待解析</span></div><div class="resume-file"><span class="resume-file-type" id="resume-file-type">FILE</span><div class="resume-file-info"><strong class="resume-file-name" id="resume-file-name"></strong><small class="resume-file-message" id="resume-file-message"></small></div></div></section><div class="composer-foot"><span>Enter 发送，Shift + Enter 换行</span><button class="send" id="send" type="submit" aria-label="发送">↑</button></div></form>
         </section>
-        <aside class="side-panel"><h3>任务流程</h3><p>任务会按照以下步骤逐步执行，结果将实时显示在对话中。</p><section class="parsed-result" id="parsed-result"><h3>解析结果</h3><p>请核对以下条件是否符合你的需求。</p><dl class="parsed-fields" id="parsed-fields"></dl></section><div class="steps" id="steps"><div class="step active"><span class="step-icon">1</span><span>初始化任务</span></div><div class="step"><span class="step-icon">2</span><span>检查登录状态</span></div><div class="step"><span class="step-icon">3</span><span>读取职位页面</span></div><div class="step"><span class="step-icon">4</span><span>分析职位匹配度</span></div><div class="step"><span class="step-icon">5</span><span>等待人工确认</span></div><div class="step"><span class="step-icon">6</span><span>执行投递</span></div></div><div class="tip">涉及投递的操作将在执行前等待你的确认。</div></aside>
+        <aside class="side-panel"><h3>任务流程</h3><p>任务会按照以下步骤逐步执行，结果将实时显示在对话中。</p><section class="parsed-result" id="parsed-result"><h3>解析结果</h3><p>请核对以下条件是否符合你的需求。</p><dl class="parsed-fields" id="parsed-fields"></dl></section><div class="steps" id="steps"><div class="step active"><span class="step-icon">1</span><span>初始化任务</span></div><div class="step"><span class="step-icon">2</span><span>检查登录状态</span></div><div class="step"><span class="step-icon">3</span><span>读取职位页面</span></div><div class="step"><span class="step-icon">4</span><span>分析职位匹配度</span></div><div class="step"><span class="step-icon">5</span><span>自动执行投递</span></div></div><div class="tip">匹配完成后，系统会自动执行投递。</div></aside>
       </div>
     </main>
   </div>
@@ -163,20 +166,82 @@
     let conversationId = '';
     let currentReply = null;
     let pendingTaskId = '';
+    let activeTaskId = '';
+    let taskControlState = 'idle';
+    let taskBusy = false;
     let currentIntent = '';
     let currentTaskFailed = false;
     let loadingConversation = false;
 
     document.querySelector('#new-chat').addEventListener('click', createNewConversation);
+    send.addEventListener('click', (event) => {
+      if (!taskBusy) return;
+      event.preventDefault();
+      void changeTaskControl();
+    });
+
+    async function changeTaskControl() {
+      if (!activeTaskId || send.disabled || !taskBusy) return;
+      const action = taskControlState === 'paused' ? 'resume' : 'pause';
+      send.disabled = true;
+      try {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/${action}`, {
+          method: 'POST',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '任务控制失败');
+        renderTaskControl(data.status);
+      } catch (error) {
+        send.disabled = false;
+        if (currentReply) currentReply.textContent = error.message || '任务控制失败，请重试。';
+      }
+    }
+
+    function renderTaskControl(status) {
+      taskControlState = status || 'running';
+      send.classList.toggle('task-running', Boolean(activeTaskId));
+      send.classList.toggle('task-paused', taskControlState === 'paused');
+      if (taskControlState === 'paused') {
+        send.textContent = '▶';
+        send.setAttribute('aria-label', '继续任务');
+        send.title = '继续任务';
+        send.disabled = false;
+      } else if (taskControlState === 'pause_requested') {
+        send.textContent = '■';
+        send.setAttribute('aria-label', '正在暂停任务');
+        send.title = '正在暂停任务';
+        send.disabled = true;
+      } else if (taskControlState === 'resuming') {
+        send.textContent = '▶';
+        send.setAttribute('aria-label', '正在继续任务');
+        send.title = '正在继续任务';
+        send.disabled = true;
+      } else {
+        send.textContent = '■';
+        send.setAttribute('aria-label', '暂停任务');
+        send.title = '暂停任务';
+        send.disabled = false;
+      }
+    }
+
+    function resetTaskControl() {
+      activeTaskId = '';
+      taskControlState = 'idle';
+      taskBusy = false;
+      send.classList.remove('task-running', 'task-paused');
+      send.textContent = '↑';
+      send.setAttribute('aria-label', '发送');
+      send.title = '';
+    }
 
     function updateConversationControls() {
       conversationList.querySelectorAll('button').forEach((button) => {
-        button.disabled = send.disabled || loadingConversation;
+        button.disabled = taskBusy || loadingConversation;
       });
     }
 
     async function createNewConversation() {
-      if (send.disabled || loadingConversation) return;
+      if (taskBusy || loadingConversation) return;
       const response = await fetch('/api/conversations', {method: 'POST'});
       const data = await response.json();
       conversationId = data.conversation_id;
@@ -184,6 +249,7 @@
       welcome.hidden = false;
       currentReply = null;
       pendingTaskId = '';
+      resetTaskControl();
       currentIntent = '';
       currentTaskFailed = false;
       setStep(0);
@@ -223,7 +289,7 @@
     }
 
     async function deleteConversation(item) {
-      if (send.disabled) {
+      if (taskBusy) {
         renderTaskNotice('error', '任务进行中', '请等待当前任务结束后再删除会话。');
         return;
       }
@@ -250,6 +316,7 @@
       welcome.hidden = false;
       currentReply = null;
       pendingTaskId = '';
+      resetTaskControl();
       currentIntent = '';
       currentTaskFailed = false;
       input.placeholder = '输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师';
@@ -263,7 +330,7 @@
     }
 
     async function loadConversation(id) {
-      if (send.disabled || loadingConversation) return;
+      if (taskBusy || loadingConversation) return;
       loadingConversation = true;
       updateConversationControls();
       try {
@@ -350,8 +417,12 @@
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (taskBusy) {
+        await changeTaskControl();
+        return;
+      }
       const text = input.value.trim();
-      if (!text || send.disabled) return;
+      if (!text) return;
       const selectedResume = resume.files[0];
       if (selectedResume && selectedResume.size > maxResumeSize) {
         renderResumeStatus(selectedResume.name, 'error', '文件超过 30MB，请压缩文件后重试');
@@ -360,6 +431,7 @@
       welcome.hidden = true;
       addMessage(text, 'user');
       input.value = '';
+      taskBusy = true;
       send.disabled = true;
       resume.disabled = true;
       updateConversationControls();
@@ -388,8 +460,10 @@
       } catch (error) {
         currentReply.textContent = error.message || '暂时无法连接服务，请检查 Flask 服务是否已启动。';
         if (selectedResume) renderResumeStatus(selectedResume.name, 'error');
+        resetTaskControl();
         setStep(0);
       } finally {
+        taskBusy = false;
         send.disabled = false;
         resume.disabled = false;
         updateConversationControls();
@@ -439,6 +513,10 @@
         return;
       }
       if (event === 'status') {
+        if (data.task_id && data.stage === 'start') {
+          activeTaskId = data.task_id;
+          renderTaskControl(data.task_control || 'running');
+        }
         if (data.resume_filename && data.resume_status) {
           renderResumeStatus(data.resume_filename, data.resume_status);
         } else if (data.resume_status === 'none') {
@@ -462,7 +540,10 @@
         setStepForStage(data.stage, data.severity);
       } else if (event === 'action_required') {
         renderTaskNotice('login', '需要登录', data.message || '请完成登录后继续。');
+      } else if (event === 'task_control') {
+        if (data.task_id === activeTaskId) renderTaskControl(data.status);
       } else if (event === 'result') {
+        resetTaskControl();
         conversationId = data.conversation_id || conversationId;
         currentIntent = data.intent || '';
         currentReply.textContent = data.message || '任务完成';
@@ -503,10 +584,11 @@
           } else {
             clearTaskNotice();
           }
-          const terminalStep = data.intent === 'job_recommendation' ? 4 : 5;
+          const terminalStep = data.intent === 'job_recommendation' ? 3 : 4;
           setStep(failed ? 0 : terminalStep);
         }
       } else if (event === 'error') {
+        resetTaskControl();
         currentReply.textContent = data.message || '任务执行失败';
         currentTaskFailed = true;
         renderTaskNotice('error', '任务未完成', data.message || '任务执行失败。');
@@ -540,11 +622,11 @@
         check_login: 1,
         wait_login: 1,
         search_jobs: 2,
-        match_job_content: 4,
-        recommendation_result: 4,
-        push_jobs: 5,
-        completed: 5,
-        done: 5
+        match_job_content: 3,
+        recommendation_result: 3,
+        push_jobs: 4,
+        completed: 4,
+        done: 4
       })[stage];
       if (index !== undefined) setStep(index);
     }
@@ -663,6 +745,10 @@
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
+        if (taskBusy) {
+          void changeTaskControl();
+          return;
+        }
         form.requestSubmit();
       }
     });

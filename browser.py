@@ -9,7 +9,7 @@ from time import monotonic, sleep
 from urllib.request import urlopen
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
-from DrissionPage import ChromiumPage, ChromiumOptions
+from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 
 from matcher import code_book
 from logging_config import get_logger
@@ -82,6 +82,18 @@ def _debug_pages(port: int) -> list[dict]:
         return []
 
 
+def _debug_browser(port: int) -> dict | None:
+    """读取 DevTools 浏览器信息；仅有有效浏览器端点才视为实例存在。"""
+    try:
+        with urlopen(f'http://127.0.0.1:{port}/json/version', timeout=1) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+        if isinstance(payload, dict) and payload.get('webSocketDebuggerUrl'):
+            return payload
+    except Exception:
+        pass
+    return None
+
+
 def _stop_stale_browser(port: int, data_dir: pathlib.Path) -> bool:
     """清理本项目留下的无页面 Chrome，避免 DrissionPage 误连失效实例。"""
     try:
@@ -132,6 +144,7 @@ class BrowserManager:
         self._last_search_url = ''
         # 浏览器就绪信号：_page 首次可用时置位，供聊天监听等后台线程等待。
         self._ready = Event()
+        self._start_lock = RLock()
 
 
     def get_page(self) -> ChromiumPage:
@@ -141,30 +154,112 @@ class BrowserManager:
 
 
     def start(self):
-        """启动浏览器；已启动则直接复用，避免重复占用同一 user_data_dir。"""
-        if self._page is None:
-            logger.info("正在启动浏览器: user_data_dir=%s port=%s", self.user_data_dir, debug_port)
-            # DrissionPage 要求 DevTools 下至少存在一个 page。旧实例可能只
-            # 占着端口但没有页面，先清理后再启动，避免连接检测卡住 30 秒。
-            if not _debug_pages(debug_port):
-                _stop_stale_browser(debug_port, self.user_data_dir)
-            options = ChromiumOptions()
-            options.headless(False)
-            options.set_local_port(debug_port)
-            options.set_user_data_path(str(self.user_data_dir))
-            options.set_argument('--no-startup-window', False)
-            options.set_argument('--new-window')
+        """优先复用或重连现有实例；仅在 DevTools 不存在时创建浏览器。"""
+        with self._start_lock:
+            if self._page is not None and self._page_is_alive(self._page):
+                return self
+
+            options = self._browser_options()
+            existing = _debug_browser(debug_port) is not None
+            if existing:
+                logger.info("发现现有浏览器实例，尝试恢复连接: port=%s", debug_port)
+                try:
+                    self._page = self._connect_existing(options)
+                    self._push_page = None
+                    logger.info("现有浏览器连接已恢复")
+                    self._ready.set()
+                    return self
+                except Exception:
+                    # 端点可能在探测后关闭；只有确认实例仍存在时才报告重连错误。
+                    if _debug_browser(debug_port) is not None:
+                        logger.exception("重连现有浏览器失败: port=%s", debug_port)
+                        raise
+                    logger.info("浏览器实例已退出，将启动新实例")
+
+            logger.info("正在创建浏览器实例: user_data_dir=%s port=%s", self.user_data_dir, debug_port)
+            _stop_stale_browser(debug_port, self.user_data_dir)
             self._page = ChromiumPage(addr_or_opts=options)
+            self._push_page = None
+            if not self._page_is_alive(self._page):
+                self._page = None
+                raise RuntimeError("浏览器已启动，但页面连接未就绪。")
             logger.info("浏览器启动完成")
             self._ready.set()
+            return self
+
+    def _browser_options(self) -> ChromiumOptions:
+        options = ChromiumOptions()
+        options.headless(False)
+        options.set_local_port(debug_port)
+        options.set_user_data_path(str(self.user_data_dir))
+        options.set_argument('--no-startup-window', False)
+        options.set_argument('--new-window')
+        return options
+
+    @staticmethod
+    def _page_is_alive(page) -> bool:
+        try:
+            page.run_js('return true;')
+            return True
+        except Exception:
+            return False
+
+    def _connect_existing(self, options: ChromiumOptions) -> ChromiumPage:
+        """连接现有 DevTools 实例，重连原标签或在没有标签时创建一个。"""
+        browser = Chromium(addr_or_opts=options)
+        try:
+            tab_ids = browser.tab_ids
+        except Exception:
+            try:
+                browser.reconnect()
+            except Exception:
+                # 进程级缓存可能还留着已经断开的 Chromium 对象。
+                Chromium._BROWSERS.pop(browser.id, None)
+                browser = Chromium(addr_or_opts=options)
+            tab_ids = browser.tab_ids
+
+        if self._page is not None:
+            try:
+                page_id = self._page.tab_id
+                if page_id in tab_ids:
+                    self._page.reconnect()
+                    if self._page_is_alive(self._page):
+                        return self._page
+            except Exception:
+                logger.info("原浏览器标签无法重连，将选择其他标签")
+
+        if tab_ids:
+            page_id = tab_ids[0]
         else:
-            logger.debug("复用已启动的浏览器页面")
-        return self
+            page_id = browser.new_tab(background=False).tab_id
+
+        cached_page = ChromiumPage._PAGES.get(browser.id)
+        if cached_page is not None and cached_page.tab_id == page_id:
+            if self._page_is_alive(cached_page):
+                return cached_page
+            ChromiumPage._PAGES.pop(browser.id, None)
+            cached_page = None
+        if cached_page is None:
+            # DrissionPage 4.1.1.4 按 browser id 缓存 ChromiumPage；
+            # 目标标签变化时清掉旧页面缓存，避免继续返回断开的 Page 对象。
+            ChromiumPage._PAGES.pop(browser.id, None)
+            page = ChromiumPage(addr_or_opts=options, tab_id=page_id)
+        else:
+            page = cached_page
+        if not self._page_is_alive(page):
+            try:
+                page.reconnect()
+            except Exception:
+                ChromiumPage._PAGES.pop(browser.id, None)
+                page = ChromiumPage(addr_or_opts=options, tab_id=page_id)
+        if not self._page_is_alive(page):
+            raise RuntimeError("现有浏览器的页面连接仍不可用。")
+        return page
 
 
     def is_ready(self) -> bool:
         """浏览器是否已经启动并持有可用页面。"""
-        return self._page is not None
+        return self._page is not None and self._page_is_alive(self._page)
 
 
     def wait_until_ready(self, timeout: float | None = None) -> bool:
@@ -173,9 +268,9 @@ class BrowserManager:
         返回 True 表示已就绪；超时返回 False。传入 timeout=None 表示一直等待，
         适用于后台监听线程在浏览器尚未启动时保持待命。
         """
-        if self._page is not None:
+        if self.is_ready():
             return True
-        return self._ready.wait(timeout)
+        return self._ready.wait(timeout) and self.is_ready()
 
 
     def goto(self, url: str):
@@ -468,6 +563,7 @@ class BrowserManager:
 
     def ensure_or_wait(self) -> None:
         """检查页面状态；验证码出现时等待人工处理后再次确认。"""
+        self.start()
         try:
             self.ensure_available()
         except VerificationRequired:

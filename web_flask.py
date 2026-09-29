@@ -16,6 +16,7 @@ from chat_worker import ChatWorker, auto_reply_enabled
 from config import get as cfg, get_all, set_config
 from conversation_store import ConversationStore
 from logging_config import get_logger, log_context
+from task_control import TaskControl
 from vector_store import vector_store
 
 logger = get_logger(__name__)
@@ -28,6 +29,7 @@ chat_worker = ChatWorker(browser, conversation_store, browser_lock)
 pending_tasks: dict[str, tuple[str, str, str, str]] = {}
 _task_events: dict[str, Queue] = {}
 _task_threads: dict[str, Thread] = {}
+_task_controls: dict[str, TaskControl] = {}
 _task_lock = Lock()
 
 
@@ -216,15 +218,17 @@ def _task_status_payload(node: str, state) -> dict:
             message=state.error,
             severity="error",
         )
-    elif node == "check_login" and status == "login_verified":
-        # SSE 在节点完成后才收到更新，所以这里展示下一个实际阶段。
+    elif node == "init_browser" and status == "browser_ready":
         payload.update(
-            stage="search_jobs",
+            stage="check_login",
+            message="正在检查登录状态...",
+        )
+    elif node == "check_login" and status == "login_verified":
+        payload.update(
             message="登录状态已确认，正在读取职位页面...",
         )
     elif node == "wait_login" and status == "login_verified":
         payload.update(
-            stage="search_jobs",
             message="登录已完成，正在读取职位页面...",
         )
     elif node == "search_jobs":
@@ -284,6 +288,13 @@ def _start_task(
     with _task_lock:
         _task_events[task_id] = events
 
+    task_control = TaskControl(
+        on_change=lambda status: events.put((
+            "task_control",
+            {"task_id": task_id, "status": status},
+        ))
+    )
+
     def worker() -> None:
         try:
             for node, state in run_task_stream(
@@ -294,6 +305,7 @@ def _start_task(
                 snapshot,
                 resume_filename,
                 saved_history,
+                task_control=task_control,
             ):
                 if state is None:
                     continue
@@ -307,13 +319,17 @@ def _start_task(
             logger.exception("后台任务失败: task_id=%s", task_id)
             events.put(("error", str(exc)))
         finally:
+            task_control.finish()
             events.put((None, None))
             with _task_lock:
                 _task_threads.pop(task_id, None)
+                _task_controls.pop(task_id, None)
+                _task_events.pop(task_id, None)
 
     thread = Thread(target=worker, name=f"task-{task_id[:8]}", daemon=True)
     with _task_lock:
         _task_threads[task_id] = thread
+        _task_controls[task_id] = task_control
     thread.start()
     return events
 
@@ -374,6 +390,7 @@ def stream_chat(
                 "task_id": task_id,
                 "resume_filename": resume_filename,
                 "resume_status": "uploaded" if resume else "none",
+                "task_control": "running",
             })
             final_state = None
             waiting_for_action = False
@@ -401,6 +418,9 @@ def stream_chat(
                     break
                 if node == "error":
                     raise RuntimeError(state)
+                if node == "task_control":
+                    yield _sse("task_control", state)
+                    continue
                 status_payload = _task_status_payload(node, state)
                 if node == "analyze_resume":
                     status_payload["message"] = {
@@ -462,6 +482,17 @@ def stream_chat(
                 "status": final_state.status,
                 "severity": "error" if final_state.error else "success",
             })
+        except (BrokenPipeError, ConnectionResetError, GeneratorExit):
+            with _task_lock:
+                control = _task_controls.get(task_id)
+            if control is not None:
+                status = control.cancel()
+                logger.info(
+                    "SSE 连接断开，已请求终止后台任务: task_id=%s status=%s",
+                    task_id,
+                    status,
+                )
+            raise
         except Exception as exc:
             logger.exception("聊天任务失败: request_id=%s duration=%.2fs", request_id, time.monotonic() - started)
             error_message = f"任务执行失败：{type(exc).__name__}: {exc}"
@@ -510,6 +541,28 @@ def task_status(task_id: str):
     if snapshot is None:
         return jsonify(error="任务不存在。"), 404
     return jsonify(snapshot)
+
+
+def _set_task_control(task_id: str, action: str):
+    with _task_lock:
+        control = _task_controls.get(task_id)
+    if control is None:
+        return jsonify(error="任务不存在或已经结束。"), 404
+
+    status = control.pause() if action == "pause" else control.resume()
+    if status == "finished":
+        return jsonify(error="任务已经结束。"), 409
+    return jsonify(task_id=task_id, status=status)
+
+
+@app.post("/api/tasks/<task_id>/pause")
+def pause_task(task_id: str):
+    return _set_task_control(task_id, "pause")
+
+
+@app.post("/api/tasks/<task_id>/resume")
+def resume_task(task_id: str):
+    return _set_task_control(task_id, "resume")
 
 
 @app.get("/api/tasks")

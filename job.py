@@ -10,6 +10,7 @@ from delivery_store import DeliveryStore
 from logging_config import get_logger
 import matcher
 from matcher import code_book, match_card_batch
+from task_control import TaskCancelled, TaskControl
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,8 @@ def match_job_content(state) -> dict:
             "result": f"排除后匹配到 {len(matched)}/{eligible_count} 个职位",
             "status": "matched",
         }
+    except TaskCancelled:
+        raise
     except Exception as exc:
         logger.exception("向量匹配失败: task_id=%s", state.task_id)
         return {
@@ -59,7 +62,12 @@ def match_job_content(state) -> dict:
         }
 
 
-def push_jobs(browser, state, browser_io_lock) -> dict:
+def push_jobs(
+    browser,
+    state,
+    browser_io_lock,
+    task_control: TaskControl | None = None,
+) -> dict:
     """向匹配职位投递简历。"""
     # 兼容已完成投递的旧任务快照，恢复任务时不能重复投递。
     if state.pipeline_processed and state.push_results:
@@ -77,7 +85,13 @@ def push_jobs(browser, state, browser_io_lock) -> dict:
             "pipeline_processed": True,
         }
     try:
-        results = push_matches(browser, matched, browser_io_lock, state.task_id)
+        results = push_matches(
+            browser,
+            matched,
+            browser_io_lock,
+            state.task_id,
+            task_control,
+        )
         ok = sum(1 for result in results if result.get("success"))
         logger.info("职位投递完成: task_id=%s success=%s total=%s", state.task_id, ok, len(matched))
         return {
@@ -92,6 +106,8 @@ def push_jobs(browser, state, browser_io_lock) -> dict:
             "pipeline_processed": True,
         }
     except Exception as exc:
+        if isinstance(exc, TaskCancelled):
+            raise
         logger.exception("职位投递失败: task_id=%s", state.task_id)
         return {
             "push_results": getattr(exc, "partial_results", []),
@@ -124,21 +140,32 @@ def push_matches(
     matched: list[dict],
     browser_io_lock: RLock,
     task_id: str = "",
+    task_control: TaskControl | None = None,
 ) -> list[dict]:
     """在浏览器锁内逐个投递，并持久化职位投递状态。"""
     results = []
     store = DeliveryStore()
     try:
         for index, item in enumerate(matched, 1):
+            if task_control is not None:
+                task_control.checkpoint()
             card = item.get("job_card") or item
             title = card.get("jobName", "") or card.get("postDescription", "")[:20]
+            if index > 1:
+                delay = uniform(1, 2)
+                while delay > 0:
+                    if task_control is not None:
+                        task_control.checkpoint()
+                    interval = min(delay, 0.2)
+                    time.sleep(interval)
+                    delay -= interval
+            if task_control is not None:
+                task_control.checkpoint()
             reserved, previous_status = store.reserve(card, task_id)
             if not reserved:
                 message = f"已跳过：此前状态为 {previous_status}"
                 results.append({"job_card": card, "success": previous_status == "success", "message": message, "skipped": True})
                 continue
-            if index > 1:
-                time.sleep(uniform(1, 2))
             with browser_io_lock:
                 if browser.check_yan_cheng_ma():
                     logger.warning("投递时检测到验证码: index=%s total=%s", index, len(matched))
@@ -168,7 +195,12 @@ def push_matches(
         store.close()
 
 
-def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
+def search_jobs(
+    browser: BrowserManager,
+    state,
+    browser_io_lock: RLock,
+    task_control: TaskControl | None = None,
+) -> dict:
     """抓取职位详情并完成批量匹配；投递由后续 push_jobs 节点执行。"""
     p = state.search_params
     excluded = {c.strip().rstrip("市") for c in p.exclude_location}
@@ -183,6 +215,8 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
     match_query = state.match_query or state.user_input
 
     def fetch_detail(job):
+        if task_control is not None:
+            task_control.checkpoint()
         if stop_event.is_set():
             raise _PipelineCancelled
         city_name = str(job.get("cityName") or "").strip().rstrip("市")
@@ -194,6 +228,8 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
         jobs_by_key[key] = job
         try:
             card = browser.get_job_card(job)
+            if task_control is not None:
+                task_control.checkpoint()
         except (VerificationRequired, AccessRestricted) as exc:
             exc.partial_cards = list(cards)
             raise
@@ -211,6 +247,8 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                         break
                     batch.append(item)
                     if len(batch) >= MATCH_BATCH_SIZE:
+                        if task_control is not None:
+                            task_control.checkpoint()
                         matched.extend(
                             match_card_batch(
                                 batch,
@@ -223,6 +261,8 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                 finally:
                     detail_queue.task_done()
             if batch and not stop_event.is_set():
+                if task_control is not None:
+                    task_control.checkpoint()
                 matched.extend(
                     match_card_batch(
                         batch,
@@ -231,6 +271,9 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                         search_params=p,
                     )
                 )
+        except TaskCancelled as exc:
+            consumer_error.append(exc)
+            stop_event.set()
         except Exception as exc:
             consumer_error.append(exc)
             stop_event.set()
@@ -241,6 +284,8 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
         try:
             locations = p.location or (["全国"] if p.location_unlimited else [""])
             for city in locations:
+                if task_control is not None:
+                    task_control.checkpoint()
                 if stop_event.is_set():
                     raise _PipelineCancelled
                 with browser_io_lock:
@@ -259,6 +304,9 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
                     if city_name and city_name in excluded:
                         continue
                     jobs_by_key.setdefault(browser.job_key(job), job)
+        except TaskCancelled as exc:
+            producer_error.append(exc)
+            stop_event.set()
         except _PipelineCancelled:
             if not consumer_error:
                 producer_error.append(_PipelineCancelled())
@@ -278,6 +326,12 @@ def search_jobs(browser: BrowserManager, state, browser_io_lock: RLock) -> dict:
     producer.start()
     producer.join()
     consumer.join()
+
+    if any(isinstance(exc, TaskCancelled) for exc in producer_error + consumer_error):
+        raise TaskCancelled
+
+    if task_control is not None:
+        task_control.checkpoint()
 
     if producer_error and not consumer_error:
         exc = producer_error[0]

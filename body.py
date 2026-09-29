@@ -16,6 +16,7 @@ from job import push_jobs as run_push_jobs
 from job import search_jobs as run_search_jobs
 from state import AgentState, SearchParams
 from logging_config import get_logger, log_context, fingerprint
+from task_control import TaskCancelled, TaskControl
 
 logger = get_logger(__name__)
 
@@ -257,7 +258,7 @@ def _format_recommendations(matched_jobs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_graph(browser: BrowserManager):
+def build_graph(browser: BrowserManager, task_control: TaskControl | None = None):
     """构建职位搜索状态图；搜索节点内部运行有界抓取—匹配管线。"""
 
 
@@ -674,6 +675,8 @@ def build_graph(browser: BrowserManager):
         logger.info("开始等待用户登录: task_id=%s timeout=600s", state.task_id)
 
         while time.monotonic() < deadline:
+            if task_control is not None:
+                deadline += task_control.checkpoint()
             try:
                 with _BROWSER_IO_LOCK:
                     browser.ensure_or_wait()
@@ -705,7 +708,7 @@ def build_graph(browser: BrowserManager):
 
     def search_jobs(state: AgentState) -> dict[str, Any]:
         """职位管线节点包装，具体实现位于 job.py。"""
-        return run_search_jobs(browser, state, BROWSER_IO_LOCK)
+        return run_search_jobs(browser, state, BROWSER_IO_LOCK, task_control)
 
     def match_job_content(state: AgentState) -> dict[str, Any]:
         """职位匹配节点包装，具体实现位于 job.py。"""
@@ -722,7 +725,7 @@ def build_graph(browser: BrowserManager):
 
     def push_jobs(state: AgentState) -> dict[str, Any]:
         """职位投递节点包装，具体实现位于 job.py。"""
-        return run_push_jobs(browser, state, BROWSER_IO_LOCK)
+        return run_push_jobs(browser, state, BROWSER_IO_LOCK, task_control)
 
 
     def route_after_intent(state: AgentState) -> str:
@@ -890,6 +893,7 @@ def run_task_stream(
     snapshot: dict[str, Any] | None = None,
     resume_filename: str = "",
     conversation_history: list[dict[str, str]] | None = None,
+    task_control: TaskControl | None = None,
 ) -> Iterator[tuple[str, AgentState | None]]:
     """流式执行任务，逐个返回节点名称和最新状态。"""
     if snapshot:
@@ -923,7 +927,14 @@ def run_task_stream(
     with log_context(task_id=state.task_id):
         logger.info("任务开始: task_id=%s resume_provided=%s", state.task_id, bool(resume))
         try:
-            for update in build_graph(browser).stream(state, stream_mode="updates"):
+            updates = build_graph(browser, task_control).stream(state, stream_mode="updates")
+            while True:
+                if task_control is not None:
+                    task_control.checkpoint()
+                try:
+                    update = next(updates)
+                except StopIteration:
+                    break
                 node, changes = next(iter(update.items()))
                 values.update(changes)
                 values["checkpoint_node"] = node
@@ -937,6 +948,18 @@ def run_task_stream(
                 time.monotonic() - started,
             )
             yield "done", final_state
+        except TaskCancelled:
+            cancelled_values = {
+                **values,
+                "error": "任务已因连接断开而终止。",
+                "result": "任务已因连接断开而终止。",
+                "status": "cancelled",
+                "working": False,
+            }
+            cancelled_state = AgentState.model_validate(cancelled_values)
+            logger.info("任务已取消: task_id=%s", state.task_id)
+            yield "cancelled", cancelled_state
+            yield "done", cancelled_state
         except Exception:
             logger.exception("任务执行异常: task_id=%s duration=%.2fs", state.task_id, time.monotonic() - started)
             raise
