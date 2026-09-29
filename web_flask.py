@@ -13,7 +13,7 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 from body import run_task_stream
 from browser import BROWSER_IO_LOCK, BrowserManager
 from chat_worker import ChatWorker, auto_reply_enabled
-from config import get as cfg, get_all, set_config
+from config import close_db, get as cfg, get_all, set_config
 from conversation_store import ConversationStore
 from logging_config import get_logger, log_context
 from task_control import TaskControl
@@ -231,6 +231,23 @@ def _task_status_payload(node: str, state) -> dict:
         payload.update(
             message="登录已完成，正在读取职位页面...",
         )
+    elif node == "search_jobs" and status == "search_timeout":
+        if state.intent == "job_recommendation":
+            payload.update(
+                stage="recommendation_result",
+                message=(
+                    state.pipeline_warning
+                    or "职位匹配超时，正在整理已完成的推荐结果..."
+                ),
+            )
+        else:
+            payload.update(
+                stage="push_jobs",
+                message=(
+                    state.pipeline_warning
+                    or "职位匹配超时，正在使用已完成的匹配结果执行投递..."
+                ),
+            )
     elif node == "search_jobs":
         payload.update(
             stage="match_job_content",
@@ -720,6 +737,8 @@ def chat():
 
 atexit.register(browser.close)
 atexit.register(vector_store.close)
+atexit.register(conversation_store.close)
+atexit.register(close_db)
 # 退出处理按注册逆序执行，因此监听器必须在浏览器关闭前停止。
 atexit.register(chat_worker.stop)
 

@@ -23,7 +23,6 @@ Boss Agent 是一个本地运行的求职流程助手。它把自然语言需求
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r request.txt
-pip install pymupdf python-docx
 python main.py
 ```
 
@@ -51,6 +50,15 @@ export embedding_openai_model="text-embedding-3-small"
 Qdrant 默认启用，数据保存在 `data/qdrant/`。填写 `qdrant_url` 后改为连接远程 Qdrant；受保护实例再填写 `qdrant_api_key`。设置 `qdrant_enabled=false` 可关闭向量库。
 
 `auto_reply=true` 会启动聊天监听。自动回复只根据已有对话生成简短建议，不会编造学历、经历或薪资承诺。
+
+职位详情读取和匹配默认最多运行 5 分钟，可通过环境变量调整：
+
+```bash
+export JOB_PIPELINE_TIMEOUT_SECONDS=300
+```
+
+投递网络异常默认最多尝试 3 次；已经记录为 `sending` 或 `unknown` 的职位，
+超过 30 分钟租约后允许再次尝试，避免进程中断后永久卡住。
 
 ## 项目结构
 

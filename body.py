@@ -258,6 +258,17 @@ def _format_recommendations(matched_jobs: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def route_after_search(state: AgentState) -> str:
+    """决定搜索完成后的下一步；匹配超时直接使用已完成结果投递。"""
+    if state.error:
+        return "failed"
+    if state.status == "search_timeout":
+        if state.intent == "job_recommendation":
+            return "recommendation_result"
+        return "push_jobs"
+    return "continue"
+
+
 def build_graph(browser: BrowserManager, task_control: TaskControl | None = None):
     """构建职位搜索状态图；搜索节点内部运行有界抓取—匹配管线。"""
 
@@ -716,8 +727,11 @@ def build_graph(browser: BrowserManager, task_control: TaskControl | None = None
 
     def recommendation_result(state: AgentState) -> dict[str, Any]:
         """输出推荐结果；推荐流程到此结束，不能进入投递节点。"""
+        result = _format_recommendations(state.matched_jobs)
+        if state.pipeline_warning:
+            result = f"{state.pipeline_warning}\n{result}"
         return {
-            "result": _format_recommendations(state.matched_jobs),
+            "result": result,
             "status": "completed",
             "working": False,
             "pipeline_processed": True,
@@ -792,6 +806,13 @@ def build_graph(browser: BrowserManager, task_control: TaskControl | None = None
             and state.status == "login_required"
         ):
             return "wait_login"
+        if (
+            state.checkpoint_node == "search_jobs"
+            and state.status == "search_timeout"
+        ):
+            if state.intent == "job_recommendation":
+                return "recommendation_result"
+            return "push_jobs"
         next_nodes = {
             "analyze_intent": "analyze_resume",
             "analyze_resume": "init_browser",
@@ -868,7 +889,14 @@ def build_graph(browser: BrowserManager, task_control: TaskControl | None = None
         "wait_login", route_on_error, {"continue": "search_jobs", "failed": END}
     )
     graph.add_conditional_edges(
-        "search_jobs", route_on_error, {"continue": "match_job_content", "failed": END}
+        "search_jobs",
+        route_after_search,
+        {
+            "continue": "match_job_content",
+            "push_jobs": "push_jobs",
+            "recommendation_result": "recommendation_result",
+            "failed": END,
+        },
     )
     graph.add_conditional_edges(
         "match_job_content",

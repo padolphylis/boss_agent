@@ -93,4 +93,5 @@ class AgentState(BaseModel):
     browser: bool = False                                                   #浏览器是否可用
     llm_status: bool = False                                                #llm是否可用
     match_query: str = ""                                                   #用于向量匹配的补充查询，推荐时可包含简历内容
+    pipeline_warning: str = ""                                              #职位管线降级或超时提示
     conversation_history: list[dict[str, str]] = Field(default_factory=list) #当前会话的历史消息

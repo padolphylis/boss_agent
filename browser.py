@@ -139,6 +139,8 @@ class BrowserManager:
     def __init__(self):
         self.user_data_dir = user_data_dir
         self._page:ChromiumPage|None = None
+        self._owns_browser = False
+        self._browser_identity: str | None = None
         # 投递请求使用独立的后台标签页，避免影响用户正在查看的搜索页面。
         self._push_page = None
         self._last_search_url = ''
@@ -160,12 +162,29 @@ class BrowserManager:
                 return self
 
             options = self._browser_options()
-            existing = _debug_browser(debug_port) is not None
+            existing_info = _debug_browser(debug_port)
+            existing = existing_info is not None
             if existing:
+                current_identity = self._browser_identity
+                existing_identity = self._browser_identity_from_debug_info(existing_info)
+                preserve_ownership = (
+                    self._owns_browser
+                    and self._page is not None
+                    and current_identity is not None
+                    and current_identity == existing_identity
+                )
                 logger.info("发现现有浏览器实例，尝试恢复连接: port=%s", debug_port)
                 try:
-                    self._page = self._connect_existing(options)
+                    page = self._connect_existing(options)
+                    connected_identity = self._browser_identity_from_page(page)
+                    self._page = page
                     self._push_page = None
+                    self._owns_browser = (
+                        preserve_ownership
+                        and connected_identity is not None
+                        and connected_identity == existing_identity
+                    )
+                    self._browser_identity = connected_identity or existing_identity
                     logger.info("现有浏览器连接已恢复")
                     self._ready.set()
                     return self
@@ -180,10 +199,14 @@ class BrowserManager:
             _stop_stale_browser(debug_port, self.user_data_dir)
             self._page = ChromiumPage(addr_or_opts=options)
             self._push_page = None
+            self._owns_browser = True
+            self._browser_identity = self._browser_identity_from_page(self._page)
             if not self._page_is_alive(self._page):
                 self._page = None
+                self._owns_browser = False
+                self._browser_identity = None
                 raise RuntimeError("浏览器已启动，但页面连接未就绪。")
-            logger.info("浏览器启动完成")
+            logger.info("浏览器启动完成，当前进程拥有浏览器实例")
             self._ready.set()
             return self
 
@@ -203,6 +226,25 @@ class BrowserManager:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _browser_identity_from_debug_info(info: dict | None) -> str | None:
+        """提取 DevTools 浏览器 ID，用于确认端口上的实例未被替换。"""
+        if not isinstance(info, dict):
+            return None
+        websocket_url = str(info.get("webSocketDebuggerUrl") or "").strip()
+        return websocket_url.rsplit("/", 1)[-1] or None
+
+    @staticmethod
+    def _browser_identity_from_page(page) -> str | None:
+        """从 DrissionPage 页面对象读取其所属浏览器 ID。"""
+        try:
+            identity = page.browser.id
+        except Exception:
+            return None
+        if isinstance(identity, (str, int)) and str(identity).strip():
+            return str(identity)
+        return None
 
     def _connect_existing(self, options: ChromiumOptions) -> ChromiumPage:
         """连接现有 DevTools 实例，重连原标签或在没有标签时创建一个。"""
@@ -1054,32 +1096,50 @@ class BrowserManager:
             return False, '未登录（bst cookie 为空）'
 
         url = f'{push_api}?securityId={security_id}&jobId={job_id}&lid={lid}'
-        try:
-            # run_async_js() 在当前 DrissionPage 版本不返回 Promise 结果；
-            # run_js() 会等待 async 函数完成并返回 fetch 的响应文本。
-            page = self._get_push_page()
-            raw = page.run_js(self._push_js, url, token)
-            payload = self._parse_push_payload(raw)
-        except Exception as exc:
-            return False, f'结果未知：{type(exc).__name__}: {exc}'
+        attempts = max(int(retries), 1)
+        last_error = "投递请求未返回结果"
+        for attempt in range(attempts):
+            try:
+                # run_async_js() 在当前 DrissionPage 版本不返回 Promise 结果；
+                # run_js() 会等待 async 函数完成并返回 fetch 的响应文本。
+                page = self._get_push_page()
+                raw = page.run_js(self._push_js, url, token)
+                payload = self._parse_push_payload(raw)
+            except Exception as exc:
+                last_error = f'结果未知：{type(exc).__name__}: {exc}'
+                if attempt + 1 < attempts:
+                    logger.warning(
+                        "投递请求异常，准备重试: job_id=%s attempt=%s/%s error=%s",
+                        job_id,
+                        attempt + 1,
+                        attempts,
+                        type(exc).__name__,
+                    )
+                    sleep(0.5 * (attempt + 1))
+                    continue
+                return False, last_error
 
-        code = str(payload.get('code')).strip()
-        message = payload.get('message') or ''
-        remind = (
-            ((payload.get('zpData') or {}).get('bizData') or {})
-            .get('chatRemindDialog') or {}
-        ).get('content') or ''
+            code = str(payload.get('code')).strip()
+            message = payload.get('message') or ''
+            remind = (
+                ((payload.get('zpData') or {}).get('bizData') or {})
+                .get('chatRemindDialog') or {}
+            ).get('content') or ''
 
-        if code == '0':
-            return True, message or 'Success'
-        if daily_limit_hint in remind:
-            return False, remind
-        return False, remind or message or f'code={code}'
+            if code == '0':
+                return True, message or 'Success'
+            if daily_limit_hint in remind:
+                return False, remind
+            return False, remind or message or f'code={code}'
+        return False, last_error
 
 
     def close(self):
         if self._page is not None:
-            logger.info("正在关闭浏览器")
+            logger.info(
+                "正在关闭浏览器连接: owns_browser=%s",
+                self._owns_browser,
+            )
             if self._push_page is not None:
                 try:
                     self._push_page.close()
@@ -1087,13 +1147,19 @@ class BrowserManager:
                     logger.debug("关闭投递后台标签页失败", exc_info=True)
                 finally:
                     self._push_page = None
-            try:
-                self._page.quit()
-            finally:
-                self._page = None
+            if self._owns_browser:
+                try:
+                    self._page.quit()
+                except Exception:
+                    logger.debug("关闭本进程创建的浏览器失败", exc_info=True)
+            else:
+                logger.info("浏览器实例由其他进程创建，仅断开当前连接")
+            self._page = None
+            self._owns_browser = False
+            self._browser_identity = None
             # 关闭后复位就绪信号，避免后台线程误判浏览器仍然可用。
             self._ready.clear()
-            logger.info("浏览器已关闭")
+            logger.info("浏览器连接已关闭")
 
 
     def __enter__(self):

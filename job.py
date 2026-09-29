@@ -1,9 +1,10 @@
 """职位搜索、详情匹配和逐条投递管线。"""
 
+import os
+import time
 from queue import Full, Queue
 from random import uniform
-from threading import Event, RLock, Thread
-import time
+from threading import Event, Lock, RLock, Thread
 
 from browser import AccessRestricted, BrowserManager, VerificationRequired
 from delivery_store import DeliveryStore
@@ -13,6 +14,34 @@ from matcher import code_book, match_card_batch
 from task_control import TaskCancelled, TaskControl
 
 logger = get_logger(__name__)
+
+DEFAULT_PIPELINE_TIMEOUT_SECONDS = 5 * 60
+PIPELINE_JOIN_GRACE_SECONDS = 5
+
+
+def _pipeline_timeout_seconds() -> float:
+    try:
+        value = float(os.getenv(
+            "JOB_PIPELINE_TIMEOUT_SECONDS",
+            str(DEFAULT_PIPELINE_TIMEOUT_SECONDS),
+        ))
+    except ValueError:
+        value = DEFAULT_PIPELINE_TIMEOUT_SECONDS
+    return max(value, 1.0)
+
+
+def _join_until(thread: Thread, deadline: float, task_control: TaskControl | None) -> bool:
+    """在截止时间内等待线程，并让任务取消/暂停及时生效。"""
+    while thread.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        thread.join(min(0.2, remaining))
+        if task_control is not None:
+            # 暂停期间不应消耗职位管线的超时时间；恢复后把暂停时长
+            # 加回截止时间，避免用户主动暂停导致任务立即超时。
+            deadline += task_control.checkpoint()
+    return True
 
 
 def match_job_content(state) -> dict:
@@ -74,12 +103,15 @@ def push_jobs(
         return {"status": state.status, "working": state.working}
     matched = state.matched_jobs
     if not matched:
+        result = (
+            f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
+            "没有可投递的匹配职位"
+        )
+        if state.pipeline_warning:
+            result = f"{state.pipeline_warning}\n{result}"
         return {
             "push_results": [],
-            "result": (
-                f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
-                "没有可投递的匹配职位"
-            ),
+            "result": result,
             "status": "completed",
             "working": False,
             "pipeline_processed": True,
@@ -93,13 +125,16 @@ def push_jobs(
             task_control,
         )
         ok = sum(1 for result in results if result.get("success"))
+        result = (
+            f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
+            f"匹配 {len(matched)} 个，投递成功 {ok} 个"
+        )
+        if state.pipeline_warning:
+            result = f"{state.pipeline_warning}\n{result}"
         logger.info("职位投递完成: task_id=%s success=%s total=%s", state.task_id, ok, len(matched))
         return {
             "push_results": results,
-            "result": (
-                f"找到 {len(state.jobs)} 个职位，获取 {len(state.job_cards)} 个详情，"
-                f"匹配 {len(matched)} 个，投递成功 {ok} 个"
-            ),
+            "result": result,
             "status": "completed",
             "working": False,
             "error": "",
@@ -212,6 +247,7 @@ def search_jobs(
     producer_error = []
     consumer_error = []
     matched = []
+    matched_lock = Lock()
     match_query = state.match_query or state.user_input
 
     def fetch_detail(job):
@@ -249,28 +285,30 @@ def search_jobs(
                     if len(batch) >= MATCH_BATCH_SIZE:
                         if task_control is not None:
                             task_control.checkpoint()
-                        matched.extend(
-                            match_card_batch(
-                                batch,
-                                match_query,
-                                p.exclude_keywords,
-                                search_params=p,
-                            )
+                        batch_matches = match_card_batch(
+                            batch,
+                            match_query,
+                            p.exclude_keywords,
+                            search_params=p,
                         )
+                        with matched_lock:
+                            matched.extend(batch_matches)
                         batch.clear()
+                    if stop_event.is_set():
+                        break
                 finally:
                     detail_queue.task_done()
             if batch and not stop_event.is_set():
                 if task_control is not None:
                     task_control.checkpoint()
-                matched.extend(
-                    match_card_batch(
-                        batch,
-                        match_query,
-                        p.exclude_keywords,
-                        search_params=p,
-                    )
+                batch_matches = match_card_batch(
+                    batch,
+                    match_query,
+                    p.exclude_keywords,
+                    search_params=p,
                 )
+                with matched_lock:
+                    matched.extend(batch_matches)
         except TaskCancelled as exc:
             consumer_error.append(exc)
             stop_event.set()
@@ -324,8 +362,82 @@ def search_jobs(
     producer = Thread(target=produce_details, name=f"job-fetch-{state.task_id[:8]}", daemon=True)
     consumer.start()
     producer.start()
-    producer.join()
-    consumer.join()
+
+    pipeline_timeout = _pipeline_timeout_seconds()
+    deadline = time.monotonic() + pipeline_timeout
+    producer_finished = False
+    consumer_finished = False
+    timed_out = False
+    timeout_stage = ""
+    try:
+        producer_finished = _join_until(producer, deadline, task_control)
+        if not producer_finished:
+            timed_out = True
+            timeout_stage = "职位详情读取"
+            stop_event.set()
+            producer_finished = _join_until(
+                producer,
+                time.monotonic() + PIPELINE_JOIN_GRACE_SECONDS,
+                task_control,
+            )
+            consumer_finished = _join_until(
+                consumer,
+                time.monotonic() + PIPELINE_JOIN_GRACE_SECONDS,
+                task_control,
+            )
+        else:
+            consumer_finished = _join_until(consumer, deadline, task_control)
+            if not consumer_finished:
+                timed_out = True
+                timeout_stage = "职位匹配"
+                stop_event.set()
+                # 生产者已经退出，消费者不再操作浏览器；宽限时间后直接使用
+                # 已经完成的匹配结果进入投递节点。
+                consumer_finished = _join_until(
+                    consumer,
+                    time.monotonic() + PIPELINE_JOIN_GRACE_SECONDS,
+                    task_control,
+                )
+    except TaskCancelled:
+        stop_event.set()
+        producer.join(PIPELINE_JOIN_GRACE_SECONDS)
+        consumer.join(PIPELINE_JOIN_GRACE_SECONDS)
+        raise
+
+    if timed_out:
+        logger.warning(
+            "职位处理超时: task_id=%s stage=%s timeout=%ss producer_done=%s consumer_done=%s",
+            state.task_id,
+            timeout_stage,
+            pipeline_timeout,
+            producer_finished,
+            consumer_finished,
+        )
+
+    # 生产者仍在浏览器操作中时，不能让后续投递和它并发使用同一个页面。
+    # 生产者已经停止后，即使匹配消费者仍在收尾，也可以安全地使用当前快照投递。
+    if timed_out and not producer_finished:
+        with matched_lock:
+            matched_snapshot = list(matched)
+        return {
+            "jobs": list(jobs_by_key.values()),
+            "job_cards": list(cards),
+            "matched_jobs": matched_snapshot,
+            "push_results": [],
+            "result": (
+                f"{timeout_stage}超过 {pipeline_timeout:.0f} 秒，"
+                "浏览器仍未释放，已停止本次投递。"
+            ),
+            "error": (
+                f"{timeout_stage}超时，浏览器操作未能在宽限时间内结束，"
+                "为避免重复或并发投递，本次未继续投递。"
+            ),
+            "status": "search_timeout",
+            "working": False,
+            "pipeline_warning": (
+                f"{timeout_stage}超时，浏览器未能安全释放，本次未继续投递。"
+            ),
+        }
 
     if any(isinstance(exc, TaskCancelled) for exc in producer_error + consumer_error):
         raise TaskCancelled
@@ -339,24 +451,40 @@ def search_jobs(
             partial_cards = getattr(exc, "partial_cards", None)
             cards = [card for card in (partial_cards or cards) if card is not None]
             logger.warning("职位搜索与详情获取中断: task_id=%s saved=%s reason=%s", state.task_id, len(cards), exc)
-            return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched,
+            with matched_lock:
+                matched_snapshot = list(matched)
+            return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched_snapshot,
                     "push_results": [], "result": f"职位读取已停止，保留 {len(cards)} 个职位详情",
                     "error": f"职位详情获取失败: {type(exc).__name__}: {exc}", "status": "cards_failed", "working": False}
         if not isinstance(exc, _PipelineCancelled):
             logger.error("职位搜索与详情获取失败: task_id=%s error=%s", state.task_id, f"{type(exc).__name__}: {exc}")
-            return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched,
+            with matched_lock:
+                matched_snapshot = list(matched)
+            return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched_snapshot,
                     "push_results": [], "result": f"职位读取已停止，保留 {len(cards)} 个职位详情",
                     "error": f"职位搜索或职位详情获取失败: {type(exc).__name__}: {exc}", "status": "search_failed", "working": False}
 
     if consumer_error:
         exc = consumer_error[0]
         logger.error("职位匹配失败: task_id=%s error=%s", state.task_id, f"{type(exc).__name__}: {exc}")
-        return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched,
+        with matched_lock:
+            matched_snapshot = list(matched)
+        return {"jobs": list(jobs_by_key.values()), "job_cards": cards, "matched_jobs": matched_snapshot,
                 "push_results": [], "result": f"职位处理已停止，保留 {len(cards)} 个职位详情",
                 "error": f"向量匹配失败: {type(exc).__name__}: {exc}", "status": "match_failed", "working": False}
 
-    matched.sort(key=lambda item: item.get("score", 0), reverse=True)
+    with matched_lock:
+        matched_snapshot = list(matched)
+    matched_snapshot.sort(key=lambda item: item.get("score", 0), reverse=True)
     jobs = list(jobs_by_key.values())
+    pipeline_warning = ""
+    status = "search_completed"
+    if timed_out:
+        status = "search_timeout"
+        pipeline_warning = (
+            f"{timeout_stage}超过 {pipeline_timeout:.0f} 秒，"
+            f"已使用当前完成的 {len(matched_snapshot)} 个匹配结果直接投递。"
+        )
     logger.info(
         "职位读取与匹配完成: task_id=%s jobs=%s cards=%s matched=%s",
         state.task_id,
@@ -367,7 +495,10 @@ def search_jobs(
     return {
         "jobs": jobs,
         "job_cards": cards,
-        "matched_jobs": matched,
-        "result": f"找到 {len(jobs)} 个职位，获取 {len(cards)} 个详情，匹配 {len(matched)} 个",
-        "status": "search_completed",
+        "matched_jobs": matched_snapshot,
+        "result": (
+            f"{pipeline_warning}\n" if pipeline_warning else ""
+        ) + f"找到 {len(jobs)} 个职位，获取 {len(cards)} 个详情，匹配 {len(matched_snapshot)} 个",
+        "status": status,
+        "pipeline_warning": pipeline_warning,
     }

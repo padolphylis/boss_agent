@@ -7,24 +7,21 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
-from threading import Lock
 from typing import Any
+
+from sql import SQLiteDatabase
 
 
 class ConversationStore:
     def __init__(self, db_path: str | Path | None = None):
         self.db_path = Path(db_path or Path(__file__).parent / "data" / "conversations.db")
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = Lock()
-        self._db = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
+        self._db = SQLiteDatabase(self.db_path)
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with self._lock, self._db:
-            self._db.executescript(
+        with self._db.transaction() as db:
+            db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
@@ -56,22 +53,22 @@ class ConversationStore:
                 );
                 """
             )
-            columns = {row[1] for row in self._db.execute("PRAGMA table_info(conversations)")}
+            columns = {row[1] for row in db.execute("PRAGMA table_info(conversations)")}
             if "title" not in columns:
-                self._db.execute("ALTER TABLE conversations ADD COLUMN title TEXT NOT NULL DEFAULT '新对话'")
+                db.execute("ALTER TABLE conversations ADD COLUMN title TEXT NOT NULL DEFAULT '新对话'")
 
     def create_conversation(self, conversation_id: str, title: str = "新对话") -> dict[str, Any]:
         conversation_id = conversation_id.strip()
-        with self._lock, self._db:
-            self._db.execute(
+        with self._db.transaction() as db:
+            db.execute(
                 "INSERT OR IGNORE INTO conversations(conversation_id, title) VALUES (?, ?)",
                 (conversation_id, title.strip() or "新对话"),
             )
         return self.get_conversation(conversation_id)
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._db.execute(
+        with self._db.transaction() as db:
+            row = db.execute(
                 "SELECT conversation_id, title, updated_at FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
@@ -86,8 +83,8 @@ class ConversationStore:
             "raw": {"source": "web"},
         })
         if saved and direction == "incoming":
-            with self._lock, self._db:
-                self._db.execute(
+            with self._db.transaction() as db:
+                db.execute(
                     "UPDATE conversations SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
                     (content[:40] or "新对话", conversation_id),
                 )
@@ -100,8 +97,8 @@ class ConversationStore:
         if not message_id or not conversation_id:
             return False
 
-        with self._lock, self._db:
-            cursor = self._db.execute(
+        with self._db.transaction() as db:
+            cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
                 (message_id, conversation_id, sender_id, sender_name, direction, content, raw_json)
@@ -117,7 +114,7 @@ class ConversationStore:
                     json.dumps(message.get("raw") or message, ensure_ascii=False, default=str),
                 ),
             )
-            self._db.execute(
+            db.execute(
                 """
                 INSERT INTO conversations(conversation_id, friend_id, friend_name, friend_source)
                 VALUES (?, ?, ?, ?)
@@ -138,8 +135,8 @@ class ConversationStore:
 
     def history(self, conversation_id: str, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 100))
-        with self._lock:
-            rows = self._db.execute(
+        with self._db.transaction() as db:
+            rows = db.execute(
                 """
                 SELECT message_id, sender_id, sender_name, direction, content, created_at
                 FROM messages WHERE conversation_id = ?
@@ -151,8 +148,8 @@ class ConversationStore:
 
     def conversations(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 200))
-        with self._lock:
-            rows = self._db.execute(
+        with self._db.transaction() as db:
+            rows = db.execute(
                 """
                 SELECT conversation_id, friend_id, friend_name, friend_source, title, updated_at
                 FROM conversations ORDER BY updated_at DESC LIMIT ?
@@ -166,8 +163,8 @@ class ConversationStore:
         conversation_id = conversation_id.strip()
         if not conversation_id:
             return []
-        with self._lock:
-            rows = self._db.execute(
+        with self._db.transaction() as db:
+            rows = db.execute(
                 "SELECT task_id, conversation_id, state_json, status, updated_at "
                 "FROM task_snapshots WHERE conversation_id = ?",
                 (conversation_id,),
@@ -184,30 +181,30 @@ class ConversationStore:
         conversation_id = conversation_id.strip()
         if not conversation_id:
             return False
-        with self._lock, self._db:
-            exists = self._db.execute(
+        with self._db.transaction() as db:
+            exists = db.execute(
                 "SELECT 1 FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
             if not exists:
                 return False
-            self._db.execute(
+            db.execute(
                 "DELETE FROM messages WHERE conversation_id = ?",
                 (conversation_id,),
             )
-            self._db.execute(
+            db.execute(
                 "DELETE FROM task_snapshots WHERE conversation_id = ?",
                 (conversation_id,),
             )
-            self._db.execute(
+            db.execute(
                 "DELETE FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             )
         return True
 
     def save_task_snapshot(self, task_id: str, state: dict[str, Any], conversation_id: str = "") -> None:
-        with self._lock, self._db:
-            self._db.execute(
+        with self._db.transaction() as db:
+            db.execute(
                 """
                 INSERT INTO task_snapshots(task_id, conversation_id, state_json, status)
                 VALUES (?, ?, ?, ?)
@@ -226,8 +223,8 @@ class ConversationStore:
             )
 
     def task_snapshot(self, task_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._db.execute(
+        with self._db.transaction() as db:
+            row = db.execute(
                 "SELECT task_id, conversation_id, state_json, status, updated_at "
                 "FROM task_snapshots WHERE task_id = ?",
                 (task_id,),
@@ -239,8 +236,8 @@ class ConversationStore:
         return result
 
     def resumable_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._db.execute(
+        with self._db.transaction() as db:
+            rows = db.execute(
                 "SELECT task_id, conversation_id, state_json, status, updated_at "
                 "FROM task_snapshots WHERE status NOT IN ('completed', 'cancelled') "
                 "ORDER BY updated_at DESC LIMIT ?",
@@ -254,5 +251,4 @@ class ConversationStore:
         return result
 
     def close(self) -> None:
-        with self._lock:
-            self._db.close()
+        self._db.close()
