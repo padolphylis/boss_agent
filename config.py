@@ -1,16 +1,3 @@
-"""统一配置层。
-
-优先从 SQLite 读取（前端可动态修改），查不到则回退到 .env 环境变量。
-GitHub 用户零配置：不连数据库也能跑。
-
-用法：
-    from config import get
-    api_key = get("openai_api_key")
-
-    # 前端改配置
-    from config import set_config
-    set_config("openai_model", "gpt-4o")
-"""
 
 import os
 import logging

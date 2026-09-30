@@ -522,6 +522,10 @@
         } else if (data.resume_status === 'none') {
           renderResumeStatus(null);
         }
+        if (data.stage === 'analyze_intent' && data.search_params) {
+          currentIntent = data.intent || currentIntent;
+          renderParsedResult(data.search_params);
+        }
         // 终态(done)不清空气泡：result 事件已写入最终文案，覆盖会导致追问内容丢失
         if (data.stage !== 'done') {
           currentReply.textContent = data.message || data.stage || '处理中...';

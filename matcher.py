@@ -116,7 +116,6 @@ def card_matches_exclusions(card, excluded_keywords):
 
 def match_card_batch(cards, query, excluded_keywords, search_params=None):
     """过滤一批职位并返回带相似度的匹配结果。
-
     启用 Qdrant 时优先使用向量库召回；Qdrant 不可用时回退到本地向量匹配。
     """
     eligible_cards = [

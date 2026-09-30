@@ -199,6 +199,9 @@ def _task_status_payload(node: str, state) -> dict:
         "resume_filename": state.resume_filename,
         "resume_status": _resume_status(state, node),
     }
+    if node == "analyze_intent" and state.intent:
+        payload["intent"] = state.intent
+        payload["search_params"] = state.search_params.model_dump()
 
     if node == "check_login" and status == "login_required":
         # check_login 完成后，wait_login 节点会持续轮询很长时间；

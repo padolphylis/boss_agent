@@ -19,7 +19,6 @@ def _start_chat_worker() -> None:
 if __name__ == "__main__":
     configure_logging()
     _start_chat_worker()
-    # 从 boss_agent 目录执行：python main.py
     uvicorn.run(
         WSGIMiddleware(app),
         host="127.0.0.1",

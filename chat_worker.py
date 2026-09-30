@@ -1,5 +1,3 @@
-"""Boss 消息后台监听器。"""
-
 from __future__ import annotations
 
 from threading import Event, Lock, Thread

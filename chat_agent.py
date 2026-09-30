@@ -1,8 +1,3 @@
-"""生成 Boss 对话回复。
-
-默认只生成建议，不主动发送；真正发送由聊天桥接层的显式调用完成。
-"""
-
 import time
 
 from langchain_openai import ChatOpenAI
