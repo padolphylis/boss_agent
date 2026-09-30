@@ -203,14 +203,14 @@ def _task_status_payload(node: str, state) -> dict:
         payload["intent"] = state.intent
         payload["search_params"] = state.search_params.model_dump()
 
-    if node == "check_login" and status == "login_required":
-        # check_login 完成后，wait_login 节点会持续轮询很长时间；
+    if status == "login_required" and node in {"check_login", "wait_login", "search_jobs"}:
+        # 初始检查或搜索阶段发现登录失效后，wait_login 节点会持续轮询；
         # 先把需要用户操作的信息推给前端，避免页面长时间没有变化。
         payload.update(
             stage="wait_login",
             message=(
-                "需要登录：请在已打开的 Boss 直聘浏览器窗口完成登录。"
-                "登录完成后系统会自动继续，无需重新发送。"
+                "登录状态已失效：请在已打开的 Boss 直聘浏览器窗口重新登录并完成登录。"
+                "登录完成后系统会重新检查并继续当前任务。"
             ),
             severity="action",
             action_required=True,

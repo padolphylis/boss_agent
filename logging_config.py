@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Generator
 
 
 _context: ContextVar[dict[str, str]] = ContextVar(
@@ -168,7 +168,7 @@ def reset_log_context(token: Token) -> None:
 
 
 @contextmanager
-def log_context(**values: str) -> Iterator[None]:
+def log_context(**values: str) -> Generator[None, None, None]:
     """在代码块内绑定 request_id/task_id 等日志上下文。"""
     token = set_log_context(**values)
     try:

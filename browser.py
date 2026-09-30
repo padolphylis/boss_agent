@@ -37,6 +37,10 @@ class AccessRestricted(BrowserBlocked):
     """页面访问受限。"""
 
 
+class LoginRequired(BrowserBlocked):
+    """登录态缺失或已失效，需要用户重新登录。"""
+
+
 base_dir = pathlib.Path(__file__).resolve().parent
 user_data_dir = base_dir.parent / 'user_data' / 'user_data'
 save_dir = base_dir / 'jobs_data'
@@ -44,6 +48,16 @@ user_data_dir.mkdir(parents=True, exist_ok=True)
 save_dir.mkdir(parents=True, exist_ok=True)
 
 job_list_target = '/wapi/zpgeek/search/joblist.json'
+login_probe_api = 'https://www.zhipin.com/wapi/zpuser/wap/getUserInfo.json'
+login_page_url = 'https://www.zhipin.com/web/user/?ka=header-login'
+login_probe_failure_codes = frozenset({'7'})
+login_probe_failure_messages = (
+    '请登录',
+    '未登录',
+    '登录状态',
+    '登录失效',
+    '重新登录',
+)
 push_api = 'https://www.zhipin.com/wapi/zpgeek/friend/add.json'
 daily_limit_hint = '您今天已与120位BOSS沟通'
 max_joblist_pages = 8
@@ -62,9 +76,14 @@ job_detail_container_selectors = (
     '.job-detail-box',
     '.job-detail',
 )
-auth_cookie_names = frozenset({'bst', 'wt2', 'zp_at'})
 login_entry_texts = ('登录/注册', '立即登录', '登录账号，查看更多好职位')
 login_entry_selector = 'header a, header button, nav a, nav button, .header a, .header button, .header-nav a, .header-nav button'
+login_page_markers = (
+    '/web/passport/',
+    '/passport/',
+    '/user/login',
+    '/login',
+)
 
 # 浏览器调试端口。DrissionPage 4.x 默认使用 9222，该端口常被其他程序
 # （如残留的旧 Chrome 实例、其他自动化脚本）占用，导致连接失败。
@@ -613,46 +632,118 @@ class BrowserManager:
             self.ensure_available()
 
 
-    def check_login(self) -> bool:
-        """用页面状态、会话 Cookie 和登录入口共同判断登录状态。
+    def _redirect_to_login(self, page) -> None:
+        """探针确认未登录后，把当前浏览器页面停在登录界面。"""
+        try:
+            current_url = str(page.url or '')
+        except Exception:
+            current_url = ''
+        normalized_url = current_url.lower()
+        if (
+            normalized_url.startswith('https://www.zhipin.com/web/user/')
+            or any(marker in normalized_url for marker in login_page_markers)
+        ):
+            return
+        logger.info("登录探针未通过，打开登录页面: url=%s", login_page_url)
+        try:
+            page.get(login_page_url)
+            page.wait.load_start()
+        except Exception:
+            logger.warning("打开登录页面失败，将在下一轮登录探针中重试", exc_info=True)
 
-        ``window._PAGE.isLogin`` 在页面异步初始化期间可能是 ``None``，
-        所以不能把这个单一信号当成未登录；这里只读取 Cookie 名称，
-        不读取或记录 Cookie 值。
+
+    def _request_login_probe(self, page) -> dict:
+        """在当前页面上下文请求需要登录的只读接口。
+
+        不返回用户信息或 Token，只保留登录判断所需的响应元数据，避免把
+        个人信息写入日志或跨出浏览器上下文。
         """
+        result = page.run_js(
+            """
+            (async (url) => {
+                try {
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: {
+                            'Accept': 'application/json, text/plain, */*',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+                    const raw = await response.text();
+                    let payload = null;
+                    try {
+                        payload = raw ? JSON.parse(raw) : null;
+                    } catch (_) {
+                        payload = null;
+                    }
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        url: response.url,
+                        code: payload && payload.code,
+                        message: payload && (payload.message || payload.msg || '')
+                    };
+                } catch (error) {
+                    return {
+                        ok: false,
+                        status: 0,
+                        url,
+                        error: String(error)
+                    };
+                }
+            })(arguments[0])
+            """,
+            login_probe_api,
+        )
+        return result if isinstance(result, dict) else {
+            'ok': False,
+            'status': 0,
+            'url': login_probe_api,
+            'error': '登录探针返回格式无效',
+        }
+
+
+    def check_login(self) -> bool:
+        """通过需要登录的只读接口确认当前浏览器会话是否有效。"""
         page = self.get_page()
         try:
-            page_flag = page.run_js(
-                """
-                const value = window._PAGE && window._PAGE.isLogin;
-                return value === true ? true : value === false ? false : null;
-                """
+            probe = self._request_login_probe(page)
+        except Exception as exc:
+            logger.warning(
+                "登录探针请求异常: error=%s",
+                type(exc).__name__,
             )
-        except Exception:
-            page_flag = None
+            return False
 
-        try:
-            cookie_names = {
-                str(cookie.get('name'))
-                for cookie in (page.cookies() or [])
-                if cookie.get('name')
-            }
-        except Exception:
-            cookie_names = set()
-
-        if page_flag is True:
+        code = str(probe.get('code')).strip()
+        logged_in = bool(probe.get('ok')) and code == '0'
+        if logged_in:
             return True
-        if page_flag is False and not (cookie_names & auth_cookie_names):
-            return False
 
-        # 会话 Cookie 只是辅助信号；过期会话若出现登录入口，应返回未登录。
-        # 详情阶段还会检查实际页面是否要求登录，不把这里的推断当成永久有效。
-        try:
-            text = str(page.run_js("return document.body ? document.body.innerText : '';") or '')
-            has_login_entry = self._has_login_entry(page)
-        except Exception:
-            return False
-        return bool(text.strip()) and bool(cookie_names & auth_cookie_names) and not has_login_entry
+        message = str(probe.get('message') or '').strip()
+        lower_message = message.lower()
+        probe_url = str(probe.get('url') or '').lower()
+        requires_login = (
+            probe.get('status') in {401, 403}
+            or code in login_probe_failure_codes
+            or any(
+                marker in lower_message
+                for marker in login_probe_failure_messages
+            )
+            or '/web/user/' in probe_url
+            or '/web/passport/' in probe_url
+        )
+        logger.warning(
+            "登录探针未通过: http_status=%s code=%s message=%s requires_login=%s",
+            probe.get('status'),
+            code or '-',
+            (message or str(probe.get('error') or ''))[:120],
+            requires_login,
+        )
+        if requires_login:
+            self._redirect_to_login(page)
+        return False
 
 
     def login(self):
@@ -669,16 +760,25 @@ class BrowserManager:
         self,
         timeout: float = 15,
         initial_delay: float = 2,
+        stable_checks: int = 2,
+        check_interval: float = 1,
     ) -> bool:
-        """等待登录态同步完成，并连续确认当前会话仍然有效。"""
+        """等待登录探针连续成功，确认当前会话可以继续执行任务。"""
         if initial_delay > 0:
             sleep(initial_delay)
         deadline = monotonic() + timeout
+        required_checks = max(int(stable_checks), 1)
+        interval = max(float(check_interval), 0.05)
+        successful_checks = 0
         while monotonic() < deadline:
             self.ensure_or_wait()
             if self.check_login():
-                return True
-            sleep(1)
+                successful_checks += 1
+                if successful_checks >= required_checks:
+                    return True
+            else:
+                successful_checks = 0
+            sleep(interval)
         return False
 
 
@@ -763,7 +863,7 @@ class BrowserManager:
         listener_started = False
         try:
             if not self.wait_until_logged_in():
-                raise RuntimeError('登录状态未稳定，请完成登录后重试。')
+                raise LoginRequired('登录状态未确认，请在浏览器中完成登录后重试。')
 
             # 通过 URL 参数重新加载筛选条件，避免登录页完成后继续使用旧页面状态。
             page = self.get_page()
@@ -774,13 +874,17 @@ class BrowserManager:
             sleep(2)
             self.ensure_or_wait()
             if not self.check_login():
-                raise RuntimeError('打开职位搜索页后登录状态失效，请重新登录。')
+                raise LoginRequired('打开职位搜索页后登录状态已失效，请重新登录。')
             has_more = True
             while has_more and len(pages) < max_pages:
                 self.ensure_available(page)
+                if not self.check_login():
+                    raise LoginRequired('职位搜索过程中登录状态已失效，请重新登录。')
                 packet = page.listen.wait(timeout=10, raise_err=False)
                 if not packet:
                     self.ensure_available(page)
+                    if not self.check_login():
+                        raise LoginRequired('职位列表请求需要重新登录。')
                     raise RuntimeError('等待职位列表接口响应超时。')
 
                 body = packet.response.body
@@ -793,6 +897,8 @@ class BrowserManager:
                 if code == '36':
                     raise AccessRestricted('职位列表请求触发 code=36，已停止采集。')
                 if code != '0':
+                    if not self.check_login():
+                        raise LoginRequired('职位列表请求需要重新登录。')
                     raise RuntimeError(f'职位列表接口返回错误: code={code}')
                 zp_data = body.get('zpData') or {}
                 page_jobs = zp_data.get('jobList') or []
@@ -879,10 +985,11 @@ class BrowserManager:
     def _ensure_detail_available(self, page) -> None:
         """详情读取期间立即停止验证、访问限制或登录失效，不自动重试。"""
         self.ensure_available(page)
-        if '/web/user/' in (page.url or ''):
-            raise AccessRestricted('登录已失效，请人工登录后重试。')
+        current_url = str(page.url or '').lower()
+        if any(marker in current_url for marker in login_page_markers) or '/web/user/' in current_url:
+            raise LoginRequired('登录已失效，请重新登录后重试。')
         if self._has_login_entry(page):
-            raise AccessRestricted('页面要求登录，请人工登录后重试。')
+            raise LoginRequired('页面要求登录，请重新登录后重试。')
 
 
     @staticmethod
@@ -999,7 +1106,7 @@ class BrowserManager:
                 sleep(0.25)
             logger.warning('职位详情未匹配或加载超时: title=%s timeout=%s', job['jobName'], timeout)
             return None
-        except (VerificationRequired, AccessRestricted):
+        except (VerificationRequired, AccessRestricted, LoginRequired):
             blocked = True
             raise
         finally:

@@ -6,7 +6,7 @@ from queue import Full, Queue
 from random import uniform
 from threading import Event, Lock, RLock, Thread
 
-from browser import AccessRestricted, BrowserManager, VerificationRequired
+from browser import AccessRestricted, BrowserManager, LoginRequired, VerificationRequired
 from delivery_store import DeliveryStore
 from logging_config import get_logger
 import matcher
@@ -98,7 +98,6 @@ def push_jobs(
     task_control: TaskControl | None = None,
 ) -> dict:
     """向匹配职位投递简历。"""
-    # 兼容已完成投递的旧任务快照，恢复任务时不能重复投递。
     if state.pipeline_processed and state.push_results:
         return {"status": state.status, "working": state.working}
     matched = state.matched_jobs
@@ -237,6 +236,19 @@ def search_jobs(
     task_control: TaskControl | None = None,
 ) -> dict:
     """抓取职位详情并完成批量匹配；投递由后续 push_jobs 节点执行。"""
+    with browser_io_lock:
+        browser.ensure_or_wait()
+        if not browser.check_login():
+            logger.warning(
+                "职位读取前再次确认登录失败，返回登录等待: task_id=%s",
+                state.task_id,
+            )
+            return {
+                "error": "",
+                "status": "login_required",
+                "working": False,
+            }
+
     p = state.search_params
     excluded = {c.strip().rstrip("市") for c in p.exclude_location}
     jobs_by_key = {}
@@ -447,6 +459,24 @@ def search_jobs(
 
     if producer_error and not consumer_error:
         exc = producer_error[0]
+        if isinstance(exc, LoginRequired):
+            logger.warning(
+                "职位搜索与详情获取中断，返回登录等待: task_id=%s reason=%s",
+                state.task_id,
+                exc,
+            )
+            with matched_lock:
+                matched_snapshot = list(matched)
+            return {
+                "jobs": list(jobs_by_key.values()),
+                "job_cards": cards,
+                "matched_jobs": matched_snapshot,
+                "push_results": [],
+                "result": "",
+                "error": "",
+                "status": "login_required",
+                "working": False,
+            }
         if isinstance(exc, (VerificationRequired, AccessRestricted)):
             partial_cards = getattr(exc, "partial_cards", None)
             cards = [card for card in (partial_cards or cards) if card is not None]
