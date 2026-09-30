@@ -16,18 +16,29 @@ Boss Agent 是一个本地运行的求职流程助手。它通过对话理解求
 
 ![任务流程](docs/workflow.png)
 
+## 相比正则等传统匹配的优势
+
+传统关键词/正则匹配靠字面命中：要为每种说法预先穷举模式，结果非黑即白，措辞一变就漏。本项目把两类条件分工处理：
+
+- **语义相似度筛选**：职位描述与用户需求各自编码为向量，用余弦相似度打分（`analysis_work_content.py`、`vector_store.py`）。"后端开发"能召回只写"服务端工程师"的岗位，同义词、缩写、换句话法都不依赖关键词逐字出现。
+- **连续打分与排序**：每个职位返回 0~1 的相关度分数，可按 `threshold` 过滤并按匹配度排序；正则只能给出「命中/未命中」，无法区分「多像」。
+- **自然语言意图解析**：一句「找杭州 15k 以上的 Java 后端，不要外包」由大模型直接解析为结构化条件（`body.py`），无需为每种表达手写并长期维护正则规则。
+- **硬条件仍精确匹配**：薪资、经验、学历、城市编码和排除关键词走精确匹配（`matcher.py` 的 `CodeBook`、`card_matches_exclusions`），避免语义召回把不满足硬性要求的岗位带入搜索。
+
+一句话：正则负责「必须满足的硬条件」，向量语义负责「像不像、有多像」，兼顾召回与准确。
+
 ## 运行
 
 要求 Python 3.10 及以上。建议使用虚拟环境。
 
-```bash
+```
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r request.txt
 python main.py
 ```
 
-浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001)。
+浏览器打开 [http://127.0.0.1:5001](http://127.0.0.1:5001/)。
 
 上传简历支持 `.pdf`、`.docx` 和 `.doc`，单个文件最大 30MB。解析 `.pdf` 和 `.docx` 使用 Python 依赖；解析旧版 `.doc` 还需要本机安装 LibreOffice。若不方便安装 LibreOffice，可以先将文件另存为 `.docx`。
 
@@ -51,7 +62,7 @@ python main.py
 
 页面设置会写入 `data/config.db`。也可以用环境变量提供初始值：
 
-```bash
+```
 export chat_openai_api_key="your-chat-key"
 export chat_openai_base_url="https://api.openai.com/v1"
 export chat_openai_model="gpt-4o-mini"
@@ -75,13 +86,11 @@ Qdrant 默认启用，未填写 `qdrant_url` 时使用本地持久化目录 `dat
 
 职位详情读取和匹配默认最多运行 5 分钟，可通过环境变量调整：
 
-```bash
+```
 export JOB_PIPELINE_TIMEOUT_SECONDS=300
 ```
 
-投递网络异常默认最多尝试 3 次；已经记录为 `sending` 或 `unknown` 的职位，
-超过 30 分钟租约后允许再次尝试，避免进程中断后永久卡住。由于网络异常时远端可能已经收到请求，
-重试和租约恢复仍不能完全排除远端重复投递的可能性。
+投递网络异常默认最多尝试 3 次；已经记录为 `sending` 或 `unknown` 的职位， 超过 30 分钟租约后允许再次尝试，避免进程中断后永久卡住。由于网络异常时远端可能已经收到请求， 重试和租约恢复仍不能完全排除远端重复投递的可能性。
 
 ## 筛选映射
 
