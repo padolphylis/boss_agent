@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Boss Agent architecture</title>
+  <desc id="desc">Web request flows through intent parsing, browser collection, vector matching, and delivery tracking.</desc>
+  <rect width="1280" height="760" fill="#f7f4ee"/>
+  <text x="48" y="58" font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" fill="#1f2933">Boss Agent 架构</text>
+  <text x="48" y="92" font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="16" fill="#52606d">网页请求进入 LangGraph 流程，浏览器负责采集，向量库负责匹配，SQLite 负责状态。</text>
+  <g font-family="PingFang SC, Noto Sans CJK SC, sans-serif" font-size="16" fill="#102a43">
+    <rect x="48" y="140" width="220" height="92" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="72" y="178" font-weight="700">Web 界面</text>
+    <text x="72" y="204" fill="#52606d">需求、简历、设置</text>
+    <rect x="340" y="140" width="250" height="92" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="364" y="178" font-weight="700">Flask / LangGraph</text>
+    <text x="364" y="204" fill="#52606d">意图解析与任务编排</text>
+    <rect x="662" y="140" width="250" height="92" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="686" y="178" font-weight="700">BrowserManager</text>
+    <text x="686" y="204" fill="#52606d">登录、搜索、详情、投递</text>
+    <rect x="984" y="140" width="248" height="92" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="1008" y="178" font-weight="700">Boss 直聘</text>
+    <text x="1008" y="204" fill="#52606d">职位列表与聊天页面</text>
+    <path d="M268 186 H340" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M590 186 H662" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M912 186 H984" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="180" y="330" width="250" height="120" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="204" y="372" font-weight="700">对话模型</text>
+    <text x="204" y="400" fill="#52606d">提取搜索条件</text>
+    <text x="204" y="424" fill="#52606d">生成聊天回复建议</text>
+    <rect x="515" y="330" width="250" height="120" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="539" y="372" font-weight="700">Embedding / Qdrant</text>
+    <text x="539" y="400" fill="#52606d">职位向量增量索引</text>
+    <text x="539" y="424" fill="#52606d">失败时回退本地余弦</text>
+    <rect x="850" y="330" width="250" height="120" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="874" y="372" font-weight="700">SQLite</text>
+    <text x="874" y="400" fill="#52606d">配置、会话、任务</text>
+    <text x="874" y="424" fill="#52606d">投递状态与断点</text>
+    <path d="M465 232 V290 H305 V330" fill="none" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M465 232 V290 H640 V330" fill="none" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M787 232 V290 H975 V330" fill="none" stroke="#334e68" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="180" y="560" width="920" height="112" rx="8" fill="#ffffff" stroke="#d9e2ec"/>
+    <text x="204" y="602" font-weight="700">执行顺序</text>
+    <text x="204" y="634" fill="#334e68">解析意图 → 解析简历 → 检查登录 → 搜索职位 → 获取详情 → 向量匹配 → 记录投递</text>
+    <text x="204" y="660" fill="#52606d">验证码、访问限制和缺少条件时停止并保留已完成进度。</text>
+  </g>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0 L10 4 L0 8 Z" fill="#334e68"/></marker></defs>
+</svg>

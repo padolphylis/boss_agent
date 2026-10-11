@@ -1,0 +1,1075 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>求职助手</title>
+  <style>
+    :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #172033; background: #f6f7fb; }
+    * { box-sizing: border-box; }
+    body { height: 100vh; margin: 0; overflow: hidden; background: #f6f7fb; }
+    button, textarea { font: inherit; }
+    .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; min-height: 0; }
+    .sidebar { display: flex; flex-direction: column; min-height: 0; padding: 26px 16px; overflow-y: auto; background: #fff; border-right: 1px solid #e9ebf2; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 12px 30px; font-weight: 700; font-size: 18px; }
+    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #fff; background: #5b67e8; font-size: 15px; }
+    .new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px 14px; color: #fff; background: #5965e8; border: 0; border-radius: 8px; cursor: pointer; }
+    .conversation-list { display: flex; flex-direction: column; gap: 5px; margin-top: 20px; overflow-y: auto; }
+    .conversation-row { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
+    .conversation-row:hover, .conversation-row.active { background: #f0f1ff; }
+    .conversation-item { min-width: 0; flex: 1; padding: 10px 8px 10px 12px; color: #687187; background: transparent; border: 0; border-radius: 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .conversation-item:hover, .conversation-row.active .conversation-item { color: #4653d0; }
+    .conversation-delete { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; margin-right: 4px; padding: 0; color: #9aa1b0; background: transparent; border: 0; border-radius: 5px; font-size: 17px; line-height: 1; cursor: pointer; opacity: 0; }
+    .conversation-row:hover .conversation-delete, .conversation-row.active .conversation-delete, .conversation-delete:focus-visible { opacity: 1; }
+    .conversation-delete:hover { color: #c55353; background: #fff0f0; }
+    .conversation-delete:disabled { cursor: wait; opacity: .35; }
+    .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; min-height: 0; overflow: hidden; }
+    .topbar { display: flex; flex: 0 0 72px; align-items: center; justify-content: space-between; height: 72px; padding: 0 42px; background: #fff; border-bottom: 1px solid #e9ebf2; }
+    .topbar h1 { margin: 0; font-size: 17px; }
+    .topbar-actions { display: flex; align-items: center; gap: 18px; }
+    .settings-button { padding: 7px 10px; color: #5965e8; background: #f0f1ff; border: 0; border-radius: 7px; cursor: pointer; }
+    .connection { display: flex; align-items: center; gap: 7px; color: #7d8595; font-size: 12px; }
+    dialog { width: min(440px, calc(100% - 32px)); padding: 0; color: #172033; background: #fff; border: 0; border-radius: 10px; box-shadow: 0 20px 70px rgba(29, 38, 75, .2); }
+    dialog::backdrop { background: rgba(29, 38, 75, .35); }
+    .settings { padding: 26px; }
+    .settings h2 { margin: 0 0 8px; font-size: 20px; }
+    .settings p { margin: 0 0 20px; color: #7a8394; font-size: 13px; line-height: 1.6; }
+    .settings label { display: block; margin-top: 14px; color: #596276; font-size: 12px; font-weight: 700; }
+    .settings input { width: 100%; margin-top: 6px; padding: 10px; color: #263047; border: 1px solid #dfe2ec; border-radius: 6px; outline: 0; }
+    .settings-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+    .settings-actions button { padding: 9px 15px; border: 0; border-radius: 6px; cursor: pointer; }
+    .settings-cancel { color: #596276; background: #eef0f5; }
+    .settings-save { color: #fff; background: #5965e8; }
+    .settings-message { min-height: 18px; margin-top: 10px; color: #d35b5b; font-size: 12px; }
+    .settings-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #eef0f5; }
+    .settings-section h3 { margin: 0 0 8px; font-size: 14px; }
+    .settings-toggle { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; line-height: 1.5; cursor: pointer; }
+    .settings-toggle input { width: auto; margin: 2px 0 0; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #29bf83; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 760px) 280px; gap: 34px; width: min(1080px, calc(100% - 84px)); height: calc(100vh - 72px); min-height: 0; margin: 0 auto; padding: 54px 0 35px; flex: 0 0 auto; overflow: hidden; }
+    .conversation { display: flex; flex-direction: column; min-height: 0; height: calc(100vh - 161px); overflow: hidden; }
+    .conversation-history { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding-right: 8px; scrollbar-gutter: stable; }
+    .welcome { margin: auto 0 30px; }
+    .eyebrow { margin: 0 0 12px; color: #5965e8; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+    .welcome h2 { margin: 0 0 12px; font-size: 34px; }
+    .welcome p { max-width: 500px; margin: 0; color: #7a8394; line-height: 1.7; font-size: 14px; }
+    .messages { display: flex; flex-direction: column; gap: 18px; margin-bottom: 22px; }
+    .message { max-width: 86%; padding: 13px 16px; border-radius: 8px; line-height: 1.65; font-size: 14px; white-space: pre-wrap; }
+    .message.user { align-self: flex-end; color: #fff; background: #5965e8; }
+    .message.assistant { align-self: flex-start; color: #4d566a; background: #fff; border: 1px solid #e8eaf1; }
+    .task-notice { display: none; align-items: flex-start; gap: 9px; margin: 0 0 16px; padding: 11px 13px; border-left: 3px solid #9aa1b0; color: #596276; background: #fff; font-size: 12px; line-height: 1.55; }
+    .task-notice.visible { display: flex; }
+    .task-notice.login { border-color: #d69e2e; color: #7a5d11; background: #fff9e8; }
+    .task-notice.input { border-color: #5965e8; color: #4653d0; background: #f3f4ff; }
+    .task-notice.warning { border-color: #d69e2e; color: #7a5d11; background: #fff9e8; }
+    .task-notice.error { border-color: #d35b5b; color: #a43f3f; background: #fff2f2; }
+    .task-notice-title { flex: 0 0 auto; font-weight: 700; }
+    .task-notice-message { min-width: 0; }
+    .pipeline-progress { display: none; margin: 0 0 16px; padding: 12px 13px; color: #596276; background: #fff; border: 1px solid #e8eaf1; border-radius: 8px; font-size: 12px; }
+    .pipeline-progress.visible { display: block; }
+    .pipeline-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .pipeline-progress-stage { min-width: 0; color: #4653d0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pipeline-progress-combination { flex: 0 0 auto; color: #9299a8; }
+    .pipeline-progress-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; }
+    .pipeline-progress-count { min-width: 0; }
+    .pipeline-progress-count dt { margin-bottom: 3px; color: #9299a8; font-size: 10px; }
+    .pipeline-progress-count dd { margin: 0; color: #465166; font-size: 13px; font-weight: 700; }
+    @media (max-width: 560px) { .pipeline-progress-counts { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; } }
+    .composer { flex: 0 0 auto; padding: 12px; background: #fff; border: 1px solid #dfe2ec; border-radius: 8px; box-shadow: 0 8px 24px rgba(39, 47, 79, .06); }
+    .composer textarea { display: block; width: 100%; min-height: 74px; padding: 5px 4px; resize: none; color: #263047; border: 0; outline: 0; }
+    .resume-input { display: block; width: 100%; margin-top: 8px; padding: 7px 4px; color: #263047; border: 0; border-top: 1px solid #eef0f5; outline: 0; font-size: 12px; }
+    .resume-input::placeholder { color: #a4aab8; }
+    .composer textarea::placeholder { color: #a4aab8; }
+    .status-line { margin-bottom: 12px; color: #7a8394; font-size: 12px; }
+    .composer-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; color: #a2a8b5; font-size: 11px; }
+    .send { display: grid; place-items: center; width: 36px; height: 36px; color: #fff; background: #5965e8; border: 0; border-radius: 8px; cursor: pointer; }
+    .send:disabled { opacity: .5; cursor: wait; }
+    .send.task-running { color: #596276; background: #f0f1f5; }
+    .send.task-running:hover:not(:disabled) { color: #4653d0; background: #f0f1ff; }
+    .send.task-paused { color: #fff; background: #5965e8; }
+    .side-panel { align-self: start; padding-top: 4px; }
+    .side-panel h3 { margin: 0 0 6px; font-size: 14px; }
+    .side-panel > p { margin: 0 0 24px; color: #9299a8; font-size: 12px; line-height: 1.6; }
+    .resume-status { display: none; margin: 8px 4px 0; padding-top: 10px; border-top: 1px solid #eef0f5; }
+    .resume-status.visible { display: block; }
+    .resume-status-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+    .resume-status-heading h3 { margin: 0; }
+    .resume-status-badge { flex: 0 0 auto; padding: 3px 7px; color: #687187; background: #f0f1f5; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    .resume-status-badge.parsing { color: #5965e8; background: #f0f1ff; }
+    .resume-status-badge.parsed { color: #218b63; background: #e9f8f1; }
+    .resume-status-badge.error { color: #c55353; background: #fff0f0; }
+    .resume-file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .resume-file-type { display: grid; place-items: center; flex: 0 0 auto; width: 30px; height: 34px; color: #5965e8; background: #f0f1ff; border: 1px solid #dfe2ff; border-radius: 5px; font-size: 9px; font-weight: 700; }
+    .resume-file-info { min-width: 0; }
+    .resume-file-name { display: block; overflow: hidden; color: #465166; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .resume-file-message { display: block; margin-top: 3px; color: #9299a8; font-size: 11px; line-height: 1.4; }
+    .parsed-result { display: none; margin: 24px 0 28px; padding-top: 18px; border-top: 1px solid #e8eaf1; }
+    .parsed-result.visible { display: block; }
+    .parsed-result h3 { margin-bottom: 12px; }
+    .parsed-result p { margin: 0 0 12px; color: #9299a8; font-size: 12px; line-height: 1.5; }
+    .parsed-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+    .parsed-field { min-width: 0; }
+    .parsed-field dt { margin-bottom: 3px; color: #9299a8; font-size: 11px; }
+    .parsed-field dd { margin: 0; overflow-wrap: anywhere; color: #465166; font-size: 12px; line-height: 1.45; }
+    .parsed-field dd.empty { color: #b0b5c0; }
+    .steps { position: relative; display: flex; flex-direction: column; gap: 18px; }
+    .steps::before { position: absolute; top: 10px; bottom: 10px; left: 9px; width: 1px; background: #e2e4ed; content: ""; }
+    .step { position: relative; display: flex; align-items: flex-start; gap: 12px; color: #9aa1b0; font-size: 12px; }
+    .step-icon { z-index: 1; display: grid; place-items: center; width: 19px; height: 19px; color: #9aa1b0; background: #f6f7fb; border: 1px solid #dfe2ea; border-radius: 50%; font-size: 10px; }
+    .step.active { color: #4653d0; font-weight: 700; }
+    .step.active .step-icon { color: #fff; background: #5965e8; border-color: #5965e8; }
+    .step.done { color: #647083; }
+    .step.done .step-icon { color: #fff; background: #2bb982; border-color: #2bb982; }
+    .tip { margin-top: 38px; padding: 14px; color: #747d90; background: #fff; border: 1px solid #e8eaf1; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+    @media (max-width: 850px) { .app { grid-template-columns: 1fr; } .sidebar { display: none; } .topbar { padding: 0 20px; } .workspace { display: block; width: min(100% - 40px, 760px); height: calc(100vh - 72px); padding-top: 30px; } .conversation { height: calc(100vh - 137px); } .side-panel { display: none; } .welcome h2 { font-size: 28px; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">职</span><span>求职助手</span></div>
+      <button class="new-chat" id="new-chat">＋ 新建对话</button>
+      <div class="conversation-list" id="conversation-list"></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><h1>职位搜索</h1><div class="topbar-actions"><button class="settings-button" id="open-settings" type="button">设置</button><div class="connection"><span class="dot"></span>服务已连接</div></div></header>
+      <div class="workspace">
+        <section class="conversation">
+          <div class="conversation-history" id="conversation-history">
+          <div class="welcome" id="welcome"><p class="eyebrow">JOB ASSISTANT</p><h2>你好，今天想找什么工作？</h2><p>你可以搜索职位、分析简历或职位信息、根据条件推荐工作，也可以直接聊聊求职。</p></div>
+            <div class="messages" id="messages"></div>
+            <div class="task-notice" id="task-notice" role="status" aria-live="polite"><strong class="task-notice-title" id="task-notice-title"></strong><span class="task-notice-message" id="task-notice-message"></span></div>
+            <section class="pipeline-progress" id="pipeline-progress" aria-live="polite">
+              <div class="pipeline-progress-heading"><strong class="pipeline-progress-stage" id="pipeline-progress-stage"></strong><span class="pipeline-progress-combination" id="pipeline-progress-combination"></span></div>
+              <dl class="pipeline-progress-counts">
+                <div class="pipeline-progress-count"><dt>职位</dt><dd id="progress-jobs">0</dd></div>
+                <div class="pipeline-progress-count"><dt>详情</dt><dd id="progress-details">0</dd></div>
+                <div class="pipeline-progress-count"><dt>语义</dt><dd id="progress-semantic">0</dd></div>
+                <div class="pipeline-progress-count"><dt>通过</dt><dd id="progress-matched">0</dd></div>
+                <div class="pipeline-progress-count"><dt>投递</dt><dd id="progress-delivery">0</dd></div>
+              </dl>
+            </section>
+          </div>
+          <form class="composer" id="chat-form"><textarea id="message" required maxlength="500" placeholder="输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师"></textarea><input class="resume-input" id="resume" type="file" accept=".pdf,.docx,.doc,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><section class="resume-status" id="resume-status" aria-live="polite"><div class="resume-status-heading"><h3>简历文件</h3><span class="resume-status-badge" id="resume-status-badge">待解析</span></div><div class="resume-file"><span class="resume-file-type" id="resume-file-type">FILE</span><div class="resume-file-info"><strong class="resume-file-name" id="resume-file-name"></strong><small class="resume-file-message" id="resume-file-message"></small></div></div></section><div class="composer-foot"><span>Enter 发送，Shift + Enter 换行</span><button class="send" id="send" type="submit" aria-label="发送">↑</button></div></form>
+        </section>
+        <aside class="side-panel"><h3>任务流程</h3><p>任务会按照以下步骤逐步执行，结果将实时显示在对话中。</p><section class="parsed-result" id="parsed-result"><h3>解析结果</h3><p>请核对以下条件是否符合你的需求。</p><dl class="parsed-fields" id="parsed-fields"></dl></section><div class="steps" id="steps"><div class="step active"><span class="step-icon">1</span><span>初始化任务</span></div><div class="step"><span class="step-icon">2</span><span>检查登录状态</span></div><div class="step"><span class="step-icon">3</span><span>读取职位页面</span></div><div class="step"><span class="step-icon">4</span><span>分析职位匹配度</span></div><div class="step"><span class="step-icon">5</span><span id="delivery-step-label">自动执行投递</span></div></div><div class="tip" id="pipeline-tip">匹配完成后，系统会自动执行投递。</div></aside>
+      </div>
+    </main>
+  </div>
+  <dialog id="settings-dialog"><form class="settings" id="settings-form" method="dialog"><h2>模型设置</h2><p id="settings-intro">对话模型和 Embedding 模型可以使用不同服务商，分别配置 API Key、URL 和模型名称。</p><section class="settings-section"><h3>对话模型</h3><label>API Key<input id="chat_openai_api_key" type="password" autocomplete="off" placeholder="留空表示保持已保存的 Key"></label><label>Base URL<input id="chat_openai_base_url" type="url" placeholder="https://api.openai.com/v1"></label><label>模型名称<input id="chat_openai_model" type="text" placeholder="gpt-4o-mini"></label></section><section class="settings-section"><h3>Embedding 模型</h3><label>API Key<input id="embedding_openai_api_key" type="password" autocomplete="off" placeholder="留空表示保持已保存的 Key"></label><label>Base URL<input id="embedding_openai_base_url" type="url" placeholder="https://api.openai.com/v1"></label><label>模型名称<input id="embedding_openai_model" type="text" placeholder="text-embedding-3-small"></label></section><section class="settings-section"><h3>Qdrant 向量库</h3><label class="settings-toggle"><input id="qdrant_enabled" type="checkbox">启用职位向量索引；关闭时使用本地向量匹配</label><label>服务地址<input id="qdrant_url" type="url" placeholder="留空表示使用本地持久化"></label><label>API Key<input id="qdrant_api_key" type="password" autocomplete="off" placeholder="远程 Qdrant 才需要"></label><label>本地目录<input id="qdrant_path" type="text" placeholder="data/qdrant"></label><label>Collection<input id="qdrant_collection" type="text" placeholder="jobs"></label></section><section class="settings-section"><h3>性能</h3><label>语义审核并发<input id="semantic_concurrency" type="number" min="1" max="20" placeholder="6"></label><label>详情批次大小<input id="match_batch_size" type="number" min="1" max="20" placeholder="跟随语义并发"></label><label class="settings-toggle"><input id="semantic_cache_enabled" type="checkbox">启用语义缓存；相同职位和条件直接复用上次判断</label></section><section class="settings-section"><h3>自动回复</h3><label class="settings-toggle"><input id="auto_reply" type="checkbox">开启后独立线程监听 Boss 聊天消息，并自动生成回复</label></section><div class="settings-message" id="settings-message"></div><div class="settings-actions"><button class="settings-cancel" id="close-settings" type="button">取消</button><button class="settings-save" type="submit">保存设置</button></div></form></dialog>
+  <script>
+    const autoReplyField = 'auto_reply';
+    const qdrantEnabledField = 'qdrant_enabled';
+    const semanticCacheField = 'semantic_cache_enabled';
+    const form = document.querySelector('#chat-form');
+    const input = document.querySelector('#message');
+    const resume = document.querySelector('#resume');
+    const send = document.querySelector('#send');
+    const messages = document.querySelector('#messages');
+    const conversationList = document.querySelector('#conversation-list');
+    const welcome = document.querySelector('#welcome');
+    const steps = [...document.querySelectorAll('.step')];
+    const taskNotice = document.querySelector('#task-notice');
+    const taskNoticeTitle = document.querySelector('#task-notice-title');
+    const taskNoticeMessage = document.querySelector('#task-notice-message');
+    const pipelineProgress = document.querySelector('#pipeline-progress');
+    const pipelineProgressStage = document.querySelector('#pipeline-progress-stage');
+    const pipelineProgressCombination = document.querySelector('#pipeline-progress-combination');
+    const progressJobs = document.querySelector('#progress-jobs');
+    const progressDetails = document.querySelector('#progress-details');
+    const progressSemantic = document.querySelector('#progress-semantic');
+    const progressMatched = document.querySelector('#progress-matched');
+    const progressDelivery = document.querySelector('#progress-delivery');
+    const resumeStatus = document.querySelector('#resume-status');
+    const resumeStatusBadge = document.querySelector('#resume-status-badge');
+    const resumeFileType = document.querySelector('#resume-file-type');
+    const resumeFileName = document.querySelector('#resume-file-name');
+    const resumeFileMessage = document.querySelector('#resume-file-message');
+    const parsedResult = document.querySelector('#parsed-result');
+    const parsedFields = document.querySelector('#parsed-fields');
+    const deliveryStepLabel = document.querySelector('#delivery-step-label');
+    const pipelineTip = document.querySelector('#pipeline-tip');
+    const settingsDialog = document.querySelector('#settings-dialog');
+    const settingsForm = document.querySelector('#settings-form');
+    const settingsMessage = document.querySelector('#settings-message');
+    const settingsFields = ['chat_openai_api_key', 'chat_openai_base_url', 'chat_openai_model', 'embedding_openai_api_key', 'embedding_openai_base_url', 'embedding_openai_model', 'qdrant_api_key', 'qdrant_url', 'qdrant_path', 'qdrant_collection', 'semantic_concurrency', 'match_batch_size'];
+    const maxResumeSize = 30 * 1024 * 1024;
+    // 首次发送时允许为空，由后端创建会话并在 SSE 结果中返回 ID。
+    let conversationId = '';
+    let currentReply = null;
+    let pendingTaskId = '';
+    let activeTaskId = '';
+    let taskControlState = 'idle';
+    let taskBusy = false;
+    let currentIntent = '';
+    let currentTaskFailed = false;
+    let loadingConversation = false;
+
+    document.querySelector('#new-chat').addEventListener('click', createNewConversation);
+    send.addEventListener('click', (event) => {
+      if (!taskBusy) return;
+      event.preventDefault();
+      void changeTaskControl();
+    });
+
+    async function changeTaskControl() {
+      if (!activeTaskId || send.disabled || !taskBusy) return;
+      const action = taskControlState === 'paused' ? 'resume' : 'pause';
+      send.disabled = true;
+      try {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/${action}`, {
+          method: 'POST',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '任务控制失败');
+        renderTaskControl(data.status);
+      } catch (error) {
+        send.disabled = false;
+        if (currentReply) currentReply.textContent = error.message || '任务控制失败，请重试。';
+      }
+    }
+
+    function renderTaskControl(status) {
+      taskControlState = status || 'running';
+      send.classList.toggle('task-running', Boolean(activeTaskId));
+      send.classList.toggle('task-paused', taskControlState === 'paused');
+      if (taskControlState === 'paused') {
+        send.textContent = '▶';
+        send.setAttribute('aria-label', '继续任务');
+        send.title = '继续任务';
+        send.disabled = false;
+      } else if (taskControlState === 'pause_requested') {
+        send.textContent = '■';
+        send.setAttribute('aria-label', '正在暂停任务');
+        send.title = '正在暂停任务';
+        send.disabled = true;
+      } else if (taskControlState === 'resuming') {
+        send.textContent = '▶';
+        send.setAttribute('aria-label', '正在继续任务');
+        send.title = '正在继续任务';
+        send.disabled = true;
+      } else {
+        send.textContent = '■';
+        send.setAttribute('aria-label', '暂停任务');
+        send.title = '暂停任务';
+        send.disabled = false;
+      }
+    }
+
+    function resetTaskControl() {
+      activeTaskId = '';
+      taskControlState = 'idle';
+      taskBusy = false;
+      send.classList.remove('task-running', 'task-paused');
+      send.textContent = '↑';
+      send.setAttribute('aria-label', '发送');
+      send.title = '';
+    }
+
+    function updateConversationControls() {
+      conversationList.querySelectorAll('button').forEach((button) => {
+        button.disabled = taskBusy || loadingConversation;
+      });
+    }
+
+    function renderPipelineMode(intent) {
+      const recommendation = intent === 'job_recommendation';
+      deliveryStepLabel.textContent = recommendation ? '整理推荐结果' : '自动执行投递';
+      pipelineTip.textContent = recommendation
+        ? '推荐结果生成后，不会自动执行投递。'
+        : '匹配完成后，系统会自动执行投递。';
+    }
+
+    async function createNewConversation() {
+      if (taskBusy || loadingConversation) return;
+      const response = await fetch('/api/conversations', {method: 'POST'});
+      const data = await response.json();
+      conversationId = data.conversation_id;
+      messages.replaceChildren();
+      welcome.hidden = false;
+      currentReply = null;
+      pendingTaskId = '';
+      resetTaskControl();
+      currentIntent = '';
+      currentTaskFailed = false;
+      renderPipelineMode('');
+      setStep(0);
+      clearTaskNotice();
+      resume.value = '';
+      renderResumeStatus(null);
+      renderParsedResult(null);
+      renderPipelineProgress(null);
+      input.focus();
+      await loadConversations();
+    }
+
+    async function loadConversations({openRecent = false} = {}) {
+      const response = await fetch('/api/conversations');
+      const data = await response.json();
+      conversationList.replaceChildren();
+      data.conversations.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = `conversation-row${item.conversation_id === conversationId ? ' active' : ''}`;
+        const button = document.createElement('button');
+        button.className = 'conversation-item';
+        button.textContent = item.title || '新对话';
+        button.title = item.title || '新对话';
+        button.addEventListener('click', () => loadConversation(item.conversation_id));
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'conversation-delete';
+        deleteButton.type = 'button';
+        deleteButton.textContent = '×';
+        deleteButton.title = '删除对话';
+        deleteButton.setAttribute('aria-label', `删除对话：${item.title || '新对话'}`);
+        deleteButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          deleteConversation(item);
+        });
+        row.append(button, deleteButton);
+        conversationList.appendChild(row);
+      });
+      updateConversationControls();
+      if (openRecent && !conversationId && data.conversations.length) {
+        await loadConversation(data.conversations[0].conversation_id);
+      }
+    }
+
+    async function deleteConversation(item) {
+      if (taskBusy) {
+        renderTaskNotice('error', '任务进行中', '请等待当前任务结束后再删除会话。');
+        return;
+      }
+      const title = item.title || '新对话';
+      if (!window.confirm(`确定删除对话“${title}”吗？删除后消息和相关任务记录将无法恢复。`)) return;
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(item.conversation_id)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '删除对话失败');
+        if (conversationId === item.conversation_id) {
+          resetConversationView();
+        }
+        await loadConversations();
+      } catch (error) {
+        renderTaskNotice('error', '删除失败', error.message || '删除对话失败，请重试。');
+      }
+    }
+
+    function resetConversationView() {
+      conversationId = '';
+      messages.replaceChildren();
+      welcome.hidden = false;
+      currentReply = null;
+      pendingTaskId = '';
+      resetTaskControl();
+      currentIntent = '';
+      currentTaskFailed = false;
+      renderPipelineMode('');
+      input.placeholder = '输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师';
+      setStep(0);
+      clearTaskNotice();
+      resume.value = '';
+      renderResumeStatus(null);
+      renderParsedResult(null);
+      renderPipelineProgress(null);
+      updateConversationControls();
+      input.focus();
+    }
+
+    async function loadConversation(id) {
+      if (taskBusy || loadingConversation) return;
+      loadingConversation = true;
+      updateConversationControls();
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '读取对话失败');
+        conversationId = id;
+        messages.replaceChildren();
+        welcome.hidden = data.messages.length > 0;
+        pendingTaskId = '';
+        currentIntent = '';
+        currentTaskFailed = false;
+        renderPipelineMode('');
+        resume.value = '';
+        clearTaskNotice();
+        data.messages.forEach((item) => addMessage(item.content, item.direction === 'incoming' ? 'user' : 'assistant'));
+        setStep(0);
+        renderResumeStatus(null);
+        renderParsedResult(null);
+        renderPipelineProgress(null);
+        await loadConversations();
+        await restoreConversationTask(id);
+      } catch (error) {
+        renderTaskNotice('error', '加载失败', error.message || '读取对话失败，请重试。');
+      } finally {
+        loadingConversation = false;
+        updateConversationControls();
+      }
+    }
+
+    async function restoreConversationTask(id) {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/active-task`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '读取任务状态失败');
+      const task = data.task;
+      if (!task) return;
+
+      const state = task.state || {};
+      currentIntent = state.intent || '';
+      renderPipelineMode(currentIntent);
+      renderParsedResult(state.search_params || null);
+      if (task.status === 'need_input' || state.status === 'need_input') {
+        pendingTaskId = task.task_id || '';
+        const question = state.pending_question || state.result || '请补充信息后继续。';
+        currentReply = addMessage(question, 'assistant');
+        renderTaskNotice('input', '需要补充信息', question);
+        return;
+      }
+
+      if (!state.working) {
+        applyTaskSummary(task);
+        return;
+      }
+      activeTaskId = task.task_id || '';
+      taskBusy = true;
+      send.disabled = true;
+      resume.disabled = true;
+      updateConversationControls();
+      currentReply = addMessage('正在恢复任务进度...', 'assistant');
+      setStepForStage(state.checkpoint_node || 'search_jobs');
+      renderPipelineProgress(state.pipeline_progress || null);
+      try {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/stream`);
+        if (!response.ok || !response.body) {
+          throw new Error(await readErrorResponse(response, `恢复任务失败（HTTP ${response.status}）`));
+        }
+        await followTaskStream(activeTaskId, response);
+      } finally {
+        taskBusy = false;
+        send.disabled = false;
+        resume.disabled = false;
+        updateConversationControls();
+        currentReply = null;
+      }
+    }
+
+    loadConversations({openRecent: true});
+
+    document.querySelector('#open-settings').addEventListener('click', () => {
+      settingsMessage.textContent = '';
+      settingsDialog.showModal();
+    });
+
+    document.querySelector('#close-settings').addEventListener('click', () => settingsDialog.close());
+
+    settingsForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = Object.fromEntries(settingsFields.map((key) => [key, document.querySelector(`#${key}`).value.trim()]));
+      // 复选框需要转成后端可识别的 true/false 字符串。
+      payload[autoReplyField] = document.querySelector(`#${autoReplyField}`).checked ? 'true' : 'false';
+      payload[qdrantEnabledField] = document.querySelector(`#${qdrantEnabledField}`).checked ? 'true' : 'false';
+      payload[semanticCacheField] = document.querySelector(`#${semanticCacheField}`).checked ? 'true' : 'false';
+      settingsMessage.textContent = '正在保存...';
+      try {
+        const response = await fetch('/api/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '保存失败');
+        settingsMessage.style.color = '#2bb982';
+        settingsMessage.textContent = data.auto_reply
+          ? '设置已保存，自动回复已开启'
+          : '设置已保存，自动回复已关闭';
+        setTimeout(() => settingsDialog.close(), 800);
+      } catch (error) {
+        settingsMessage.style.color = '#d35b5b';
+        settingsMessage.textContent = error.message || '保存失败';
+      }
+    });
+
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/config');
+        const data = await response.json();
+        settingsFields.filter((key) => !key.endsWith('_api_key')).forEach((key) => {
+          document.querySelector(`#${key}`).value = data[key] || '';
+        });
+        document.querySelector('#qdrant_enabled').checked = data.qdrant_enabled !== false;
+        document.querySelector('#qdrant_api_key').value = '';
+        document.querySelector(`#${semanticCacheField}`).checked = data[semanticCacheField] !== false;
+        document.querySelector(`#${autoReplyField}`).checked = Boolean(data[autoReplyField]);
+        if (!data.configured) {
+          settingsMessage.textContent = '请先完成基础设置';
+          settingsDialog.showModal();
+        }
+      } catch (error) {
+        settingsMessage.textContent = '无法读取配置，请检查 Flask 服务';
+        settingsDialog.showModal();
+      }
+    }
+
+    loadSettings();
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (taskBusy) {
+        await changeTaskControl();
+        return;
+      }
+      const text = input.value.trim();
+      if (!text) return;
+      const selectedResume = resume.files[0];
+      if (selectedResume && selectedResume.size > maxResumeSize) {
+        renderResumeStatus(selectedResume.name, 'error', '文件超过 30MB，请压缩文件后重试');
+        return;
+      }
+      welcome.hidden = true;
+      addMessage(text, 'user');
+      input.value = '';
+      taskBusy = true;
+      send.disabled = true;
+      resume.disabled = true;
+      updateConversationControls();
+      currentIntent = '';
+      currentTaskFailed = false;
+      clearTaskNotice();
+      currentReply = addMessage('正在连接任务...', 'assistant');
+      setStep(0);
+      renderResumeStatus(selectedResume ? selectedResume.name : null, selectedResume ? 'parsing' : 'none');
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          body: (() => {
+            const payload = new FormData();
+            payload.append('message', text);
+            payload.append('conversation_id', conversationId);
+            if (pendingTaskId) payload.append('task_id', pendingTaskId);
+            if (resume.files[0]) payload.append('resume_file', resume.files[0]);
+            return payload;
+          })()
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(await readErrorResponse(response, `请求失败（HTTP ${response.status}）`));
+        }
+        await followTaskStream(activeTaskId, response);
+      } catch (error) {
+        currentReply.textContent = error.message || '暂时无法连接服务，请检查 Flask 服务是否已启动。';
+        if (selectedResume) renderResumeStatus(selectedResume.name, 'error');
+        resetTaskControl();
+        setStep(0);
+      } finally {
+        taskBusy = false;
+        send.disabled = false;
+        resume.disabled = false;
+        updateConversationControls();
+        currentReply = null;
+      }
+    });
+
+    function wait(milliseconds) {
+      return new Promise((resolve) => setTimeout(resolve, milliseconds));
+    }
+
+    function taskSummaryIsTerminal(summary) {
+      const state = summary?.state || {};
+      return state.working === false
+        || ['completed', 'need_input', 'cancelled', 'interrupted'].includes(
+          summary?.status || state.status
+        );
+    }
+
+    function applyTaskSummary(summary) {
+      const state = summary?.state || {};
+      if (!summary?.task_id) return false;
+      activeTaskId = summary.task_id;
+      currentIntent = state.intent || currentIntent;
+      renderPipelineMode(currentIntent);
+      const status = summary.status || state.status || '';
+      const terminal = state.working === false
+        || ['completed', 'need_input', 'cancelled', 'interrupted'].includes(status);
+      if (state.search_params) renderParsedResult(state.search_params);
+      if (state.pipeline_progress) {
+        const progress = {...state.pipeline_progress};
+        if (terminal) progress.phase = state.error ? 'failed' : 'completed';
+        renderPipelineProgress(progress);
+      }
+      if (!terminal) return false;
+
+      const severity = state.error
+        ? 'error'
+        : state.pipeline_warning
+          ? 'warning'
+          : 'success';
+      handleTaskResult({
+        message: state.error || state.pending_question || state.result || '任务已完成。',
+        task_id: summary.task_id,
+        status: status || 'completed',
+        error_source: state.error_source || '',
+        severity,
+        action_required: status === 'need_input',
+        intent: state.intent || currentIntent,
+        conversation_id: summary.conversation_id || conversationId,
+        search_params: state.search_params || null,
+        resume_filename: state.resume_filename || '',
+        resume_status: state.resume_parse_status || 'none',
+        pipeline_progress: state.pipeline_progress || null,
+      });
+      return true;
+    }
+
+    async function fetchTaskSummary(taskId) {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || `读取任务状态失败（HTTP ${response.status}）`);
+      }
+      return data;
+    }
+
+    async function reconnectTaskStream(taskId) {
+      let delay = 500;
+      while (true) {
+        try {
+          const summary = await fetchTaskSummary(taskId);
+          if (applyTaskSummary(summary) || taskSummaryIsTerminal(summary)) return true;
+          const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/stream`, {
+            cache: 'no-store',
+          });
+          if (response.ok && response.body) {
+            return response;
+          }
+          if (response.status === 409) {
+            const latest = await fetchTaskSummary(taskId);
+            if (applyTaskSummary(latest) || taskSummaryIsTerminal(latest)) return true;
+          } else {
+            throw new Error(await readErrorResponse(response, `恢复任务失败（HTTP ${response.status}）`));
+          }
+        } catch (error) {
+          renderTaskNotice(
+            'warning',
+            '正在恢复连接',
+            '任务仍在后台执行，前端连接暂时中断，正在自动重试。',
+          );
+        }
+        await wait(delay);
+        delay = Math.min(delay * 2, 5000);
+      }
+    }
+
+    async function followTaskStream(taskId, response) {
+      let currentResponse = response;
+      while (true) {
+        const terminal = await readSse(currentResponse.body);
+        if (terminal) return;
+        // 新任务的 task_id 由 SSE 首条 status 事件返回；如果首个连接
+        // 恰好在该事件前断开，使用页面已更新的 activeTaskId 仍可恢复。
+        const reconnectTaskId = taskId || activeTaskId;
+        if (!reconnectTaskId) {
+          throw new Error('任务连接中断，未能取得任务编号。');
+        }
+        renderTaskNotice(
+          'warning',
+          '正在恢复连接',
+          '任务仍在后台执行，前端连接暂时中断，正在自动重试。',
+        );
+        const reconnected = await reconnectTaskStream(reconnectTaskId);
+        if (reconnected === true) return;
+        currentResponse = reconnected;
+        renderTaskNotice(
+          'warning',
+          '任务连接已恢复',
+          '已重新连接后台任务，继续显示最新进度。',
+        );
+      }
+    }
+
+    async function readSse(stream) {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let terminal = false;
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop() || '';
+        chunks.forEach((chunk) => {
+          terminal = handleSse(chunk) || terminal;
+        });
+        if (done) break;
+      }
+      if (buffer.trim()) {
+        terminal = handleSse(buffer) || terminal;
+      }
+      return terminal;
+    }
+
+    async function readErrorResponse(response, fallback) {
+      const contentType = response.headers.get('content-type') || '';
+      const text = await response.text().catch(() => '');
+      if (contentType.includes('application/json')) {
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+        if (data.error) return data.error;
+      }
+      if (response.status === 413) {
+        return '上传请求超过大小限制。简历文件上限为 30MB，请压缩文件后重试。';
+      }
+      if (text.trim() && !text.trimStart().startsWith('<')) return text.trim();
+      return fallback;
+    }
+
+    function handleSse(chunk) {
+      const event = chunk.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
+      const line = chunk.match(/^data:\s*(.+)$/m)?.[1];
+      if (!line) return false;
+      let data;
+      try {
+        data = JSON.parse(line);
+      } catch {
+        currentReply && (currentReply.textContent = '服务返回了无法识别的状态，请重试。');
+        renderTaskNotice('error', '状态异常', '服务返回了无法识别的任务状态，请重试。');
+        return true;
+      }
+      if (event === 'status') {
+        if (data.task_id && data.stage === 'start') {
+          activeTaskId = data.task_id;
+          renderTaskControl(data.task_control || 'running');
+        }
+        if (data.resume_filename && data.resume_status) {
+          renderResumeStatus(data.resume_filename, data.resume_status);
+        } else if (data.resume_status === 'none') {
+          renderResumeStatus(null);
+        }
+        if (data.stage === 'analyze_intent' && data.search_params) {
+          currentIntent = data.intent || currentIntent;
+          renderPipelineMode(currentIntent);
+          renderParsedResult(data.search_params);
+        }
+        if (data.pipeline_progress) {
+          renderPipelineProgress(data.pipeline_progress);
+        }
+        // 终态(done)不清空气泡：result 事件已写入最终文案，覆盖会导致追问内容丢失
+        if (data.stage !== 'done') {
+          currentReply.textContent = data.message || data.stage || '处理中...';
+        }
+        if (data.action_required) {
+          renderTaskNotice('login', '需要登录', data.message);
+        } else if (data.stage === 'done') {
+          if (data.severity === 'warning') {
+            renderTaskNotice('warning', '任务完成但有提示', data.message);
+          } else if (!currentTaskFailed && !pendingTaskId && currentIntent !== 'chat') {
+            clearTaskNotice();
+          }
+        } else if (data.severity === 'error') {
+          renderTaskNotice(
+            'error',
+            errorSourceTitle(data.error_source, '任务异常'),
+            data.message,
+          );
+        } else if (data.severity === 'warning') {
+          renderTaskNotice('warning', '任务提示', data.message);
+        } else if (data.stage === 'wait_login' && data.status === 'login_verified') {
+          clearTaskNotice();
+        }
+        setStepForStage(data.stage, data.severity);
+        if (data.stage === 'done') return true;
+      } else if (event === 'action_required') {
+        renderTaskNotice('login', '需要登录', data.message || '请完成登录后继续。');
+      } else if (event === 'task_control') {
+        if (data.task_id === activeTaskId) renderTaskControl(data.status);
+      } else if (event === 'result') {
+        handleTaskResult(data);
+        return true;
+      } else if (event === 'error') {
+        resetTaskControl();
+        currentReply.textContent = data.message || '任务执行失败';
+        currentTaskFailed = true;
+        renderTaskNotice(
+          'error',
+          errorSourceTitle(data.error_source),
+          data.message || '任务执行失败。',
+        );
+        pendingTaskId = '';
+        if (resumeStatus.classList.contains('visible') &&
+            !resumeStatusBadge.classList.contains('parsed') &&
+            !resumeStatusBadge.classList.contains('error')) {
+          renderResumeStatus(resumeFileName.textContent, 'error');
+        }
+        setStep(0);
+        return true;
+      }
+      currentReply.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      return false;
+    }
+
+    function handleTaskResult(data) {
+      resetTaskControl();
+      conversationId = data.conversation_id || conversationId;
+      currentIntent = data.intent || '';
+      renderPipelineMode(currentIntent);
+      if (currentReply) currentReply.textContent = data.message || '任务完成';
+      // 文件已经由服务端保存；清空控件，避免追问或下一次任务重复上传同一文件。
+      resume.value = '';
+      if (data.resume_filename && data.resume_status) {
+        renderResumeStatus(data.resume_filename, data.resume_status);
+      } else if (data.resume_status === 'none') {
+        renderResumeStatus(null);
+      }
+      renderParsedResult(
+        ['job_search', 'job_recommendation'].includes(data.intent)
+          ? data.search_params
+          : null
+      );
+      if (data.pipeline_progress) {
+        const progress = {...data.pipeline_progress};
+        if (data.status !== 'need_input' && data.intent !== 'chat') {
+          progress.phase = data.severity === 'error' ? 'failed' : 'completed';
+        }
+        renderPipelineProgress(progress);
+      }
+      loadConversations();
+      if (data.intent === 'chat') {
+        pendingTaskId = '';
+        currentTaskFailed = false;
+        clearTaskNotice();
+        setStep(0);
+      } else if (data.status === 'need_input') {
+        pendingTaskId = data.task_id || '';
+        currentTaskFailed = false;
+        input.placeholder = data.message || '请补充信息';
+        renderTaskNotice('input', '需要补充信息', data.message || '请补充信息后继续。');
+        setStep(0);
+      } else {
+        pendingTaskId = '';
+        input.placeholder = '输入你的求职需求，例如：杭州 5-10K，本科，1-3年，AI应用工程师';
+        const failed = data.severity === 'error'
+          || data.status === 'failed'
+          || data.status?.endsWith('_failed')
+          || data.status?.endsWith('_timeout')
+          || data.status === 'interrupted';
+        currentTaskFailed = failed;
+        if (failed) {
+          renderTaskNotice(
+            'error',
+            errorSourceTitle(data.error_source),
+            data.message || '任务执行失败。',
+          );
+        } else if (data.severity === 'warning') {
+          renderTaskNotice(
+            'warning',
+            '任务完成但有提示',
+            data.message || '任务已完成，但部分阶段存在提示。',
+          );
+        } else {
+          clearTaskNotice();
+        }
+        const terminalStep = data.intent === 'job_recommendation' ? 3 : 4;
+        setStep(failed ? 0 : terminalStep, !failed);
+      }
+      if (currentReply) {
+        currentReply.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      }
+    }
+
+    function setStepForStage(stage, severity = '') {
+      if (stage === 'done' && (currentTaskFailed || currentIntent === 'chat' || pendingTaskId)) {
+        setStep(0);
+        return;
+      }
+      if (stage === 'done') {
+        setStep(currentIntent === 'job_recommendation' ? 3 : 4, true);
+        return;
+      }
+      if (severity === 'error') {
+        setStep(0);
+        return;
+      }
+      const index = ({
+        start: 0,
+        analyze_intent: 0,
+        analyze_resume: 0,
+        prepare_recommendation: 0,
+        analyze_content: 0,
+        init_browser: 0,
+        check_login: 1,
+        wait_login: 1,
+        search_jobs: 2,
+        match_job_content: 3,
+        recommendation_result: 3,
+        push_jobs: 4,
+        completed: 4,
+        done: 4
+      })[stage];
+      if (index !== undefined) setStep(index);
+    }
+
+    function renderTaskNotice(kind, title, message) {
+      taskNotice.className = `task-notice visible ${kind}`;
+      taskNoticeTitle.textContent = title;
+      taskNoticeMessage.textContent = message || '';
+    }
+
+    function clearTaskNotice() {
+      taskNotice.className = 'task-notice';
+      taskNoticeTitle.textContent = '';
+      taskNoticeMessage.textContent = '';
+    }
+
+    function renderPipelineProgress(progress) {
+      if (!progress || !progress.phase) {
+        pipelineProgress.classList.remove('visible');
+        return;
+      }
+      const phaseLabels = {
+        searching: '正在读取职位列表',
+        listing: '正在读取职位列表',
+        details: '正在读取职位详情',
+        semantic: '正在进行语义审核',
+        delivery: '正在执行投递',
+        delivery_rate_limited: '投递受到平台限制',
+        completed: '职位处理已完成',
+        failed: '职位处理失败',
+      };
+      pipelineProgressStage.textContent =
+        phaseLabels[progress.phase] || '职位管线处理中';
+      pipelineProgressCombination.textContent =
+        progress.search_total
+          ? `组合 ${progress.search_index || 0}/${progress.search_total}`
+          : '';
+      progressJobs.textContent = progress.jobs || 0;
+      progressDetails.textContent = progress.details || 0;
+      progressSemantic.textContent = progress.semantic_checked || 0;
+      progressMatched.textContent = progress.matched || 0;
+      progressDelivery.textContent = progress.delivery_success || 0;
+      pipelineProgress.classList.add('visible');
+    }
+
+    function errorSourceTitle(source, fallback = '任务未完成') {
+      return ({
+        llm: 'LLM 服务异常',
+        embedding: 'Embedding 服务异常',
+        browser: '浏览器服务异常',
+      })[source] || fallback;
+    }
+
+    // 解析结果字段顺序与展示名称，空值统一提示“未指定”，方便用户核对解析是否正确。
+    const parsedFieldDefinitions = [
+      ['zhi_wei', '职位'],
+      ['salary', '真实薪资'],
+      ['experience', '经验'],
+      ['scale', '公司规模'],
+      ['degree', '学历'],
+      ['job_type', '岗位类型'],
+      ['location', '工作地点'],
+      ['exclude_location', '排除地点'],
+      ['exclude_keywords', '排除关键词'],
+    ];
+
+    function formatParsedValue(value) {
+      if (Array.isArray(value)) return value.filter(Boolean).join('、');
+      if (value === null || value === undefined || value === '') return '';
+      return String(value);
+    }
+
+    const resumeStatusLabels = {
+      selected: '待解析',
+      uploaded: '等待解析',
+      parsing: '解析中',
+      parsed: '已解析',
+      error: '解析失败',
+      skipped: '未解析',
+    };
+
+    const resumeStatusMessages = {
+      selected: '发送任务后开始解析文件',
+      uploaded: '文件已上传，等待解析',
+      parsing: '正在提取简历文本',
+      parsed: '文件内容已提取，可用于职位匹配',
+      error: '文件未能解析，请重新选择 PDF、DOCX 或 DOC',
+      skipped: '本次任务未使用简历内容',
+    };
+
+    function renderResumeStatus(filename, status = 'selected', message = '') {
+      if (!filename || status === 'none') {
+        resumeStatus.classList.remove('visible');
+        resumeFileName.textContent = '';
+        resumeFileMessage.textContent = '';
+        return;
+      }
+      const extension = filename.split('.').pop()?.toUpperCase() || 'FILE';
+      const normalizedStatus = resumeStatusLabels[status] ? status : 'selected';
+      resumeStatusBadge.className = `resume-status-badge ${normalizedStatus}`;
+      resumeStatusBadge.textContent = resumeStatusLabels[normalizedStatus];
+      resumeFileType.textContent = extension.slice(0, 4);
+      resumeFileName.textContent = filename;
+      resumeFileMessage.textContent = message || resumeStatusMessages[normalizedStatus];
+      resumeStatus.classList.add('visible');
+    }
+
+    resume.addEventListener('change', () => {
+      const file = resume.files[0];
+      renderResumeStatus(file ? file.name : null, file ? 'selected' : 'none');
+    });
+
+    function renderParsedResult(params) {
+      if (!params) {
+        parsedFields.replaceChildren();
+        parsedResult.classList.remove('visible');
+        return;
+      }
+      const fragment = document.createDocumentFragment();
+      parsedFieldDefinitions.forEach(([key, label]) => {
+        let text = formatParsedValue(params[key]);
+        // 兼容旧任务快照：旧版本只有平台薪资桶，没有真实薪资字段。
+        if (key === 'salary' && !text) text = formatParsedValue(params.money);
+        // 地点不限时明确提示，否则用户会误以为城市没有解析出来。
+        if (key === 'location' && !text && params.location_unlimited) text = '不限';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'parsed-field';
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const detail = document.createElement('dd');
+        detail.textContent = text || '未指定';
+        if (!text) detail.classList.add('empty');
+        wrapper.append(term, detail);
+        fragment.appendChild(wrapper);
+      });
+      parsedFields.replaceChildren(fragment);
+      parsedResult.classList.add('visible');
+    }
+
+ function addMessage(text, kind) {
+      const item = document.createElement('div');
+      item.className = `message ${kind}`;
+      item.textContent = text;
+      messages.appendChild(item);
+      return item;
+    }
+
+    function setStep(active, completed = false) {
+      steps.forEach((step, index) => {
+        step.classList.toggle('active', !completed && index === active);
+        step.classList.toggle('done', completed || index < active);
+      });
+    }
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (taskBusy) {
+          void changeTaskControl();
+          return;
+        }
+        form.requestSubmit();
+      }
+    });
+  </script>
+</body>
+</html>
